@@ -123,6 +123,118 @@
   `WIZARD_META_KEYS` as regeneration triggers and `mcp-v1` as a release
   blocker.
 
+- **The Wizard can ask, remember and draw.** Three confirm-class tools in
+  `nvh/integrations/wizard/tools.py`. `ask_user` puts one clarifying
+  question on a card and ends the turn; the answer arrives as the next
+  message and as a `TOOL_RESULT ask_user` history line. It is offered to
+  every profile, `strict-tools` included, whenever a human is present and
+  never on an unattended turn, and a second question in the same turn lands
+  in `deferred_tool_calls` with `reason: question_pending`. `remember`
+  composes a note the card shows before anything is written and saves it
+  as an `nvh-memory/1` record under `$NVH_HOME/vault/Wizard Memory/` only
+  (tags `wizard` plus up to eight from the model, `Source: wizard`, indexed
+  into the vault RAG collection best-effort); a model-supplied `home_dir`
+  or `category` is dropped and a body carrying `approval_token` or the
+  privileged terminal hint is refused. `generate_image` plans before it
+  draws: the card's `plan` names the backend, the model and the cost
+  verdict, the server pins the turn's profile (and its home) onto the call
+  so the profile's cost ceiling is enforced on Run, and a request without a
+  valid pin is refused rather than run without a ceiling. `tool_call`
+  stream events carry `safety_class`; `AgentProfile.starter` holds the six
+  core built-ins' starter prompts and `GET /v1/wizard/profiles` rows carry
+  `starter`, `background` and `accent` (`POST` accepts `starter`);
+  `daily-notes-coach` gains `remember`.
+- **One image planner and renderer** (`nvh/integrations/imagegen.py`).
+  `plan_image_backend` picks NVIDIA-hosted when `NVAPI_KEY` is set (and
+  only that variable: a NIM chat key never moves a box onto the paid path),
+  else the local ComfyUI at the host and port nvHive recorded when it
+  started it, else says plainly that no backend is available; a profile
+  with a per-turn cost ceiling never takes the hosted path while its price
+  is unknown, and the card says why. `render_image` saves under
+  `$NVH_HOME/outputs/images/<scope>/`, the authenticated
+  `GET /v1/outputs/images/{scope}/{filename}` (`nvh/api/routes/outputs.py`)
+  serves the file with a private cache header, and the Wizard's
+  `analyze_image` may read that folder, so a generated image can be looked
+  at in the same chat. Nothing prunes the folder in 0.46; the result says
+  so.
+- **Schedules run inside the API process.**
+  `nvh/integrations/services/schedule_runner.py` turns each due schedule
+  into a `schedule-run` job under `$NVH_HOME/jobs/`: `mode: ask` is an
+  unattended Wizard turn in the schedule's own conversation under the
+  profile's whitelist intersected with the read-only `SCHEDULE_AUTO_TOOLS`
+  roster (a confirm or privileged request is recorded on the run with no
+  plan and no approval token, and the run reads `deferred`); `mode:
+  convene` calls the council; `mode: do` is refused by the API runner with
+  a terminal hint, since only `nvh schedule start` can show its approval
+  prompt. Each run records `last_status` (`ok`, `deferred`, `skipped`,
+  `error`) and its cost on the schedule, and the last twenty runs per
+  schedule are kept. One runner per store: a heartbeat lock at
+  `state/scheduler.lock`, stale by age only and never by a pid probe, that
+  a side task beats while a run is in flight, that a runner whose lock was
+  taken over stands down from, and that the API loop waits on while
+  `nvh schedule start` holds it. The lifespan starts the loop once the
+  engine is ready, polling every `NVH_SCHEDULER_POLL_S` seconds (default
+  60); `NVH_SCHEDULER=0` keeps it off; at shutdown a run in flight gets five
+  seconds, then the task is cancelled and the lock released. Seven
+  authenticated routes: `GET`/`POST /v1/schedules`, `GET`/`PATCH`/`DELETE
+  /v1/schedules/{id}`, `POST /v1/schedules/{id}/run` (202, or 409 naming
+  the job while a run of that schedule is in flight) and
+  `GET /v1/schedules/{id}/runs`; `GET /v1/jobs` takes `exclude_kind` and
+  `schedule_id`. On the CLI: `nvh schedule add --name --profile`,
+  `nvh schedule enable|disable|run <id>`, a `schedule list` with Name,
+  Status, Last and Last cost columns, and `nvh schedule start` deferring to
+  a live API runner (`--once` beside one runs only the `do` schedules). The
+  doctor's Scheduler row says which process runs schedules and names a
+  quarantined `schedules.json`.
+- **`nvh vault` group**: `status`, `init`, `list [--category --tag
+  --memory-only --limit]`, `forget <id>` and `upgrade --add-ids
+  [--dry-run]`, which gives a pre-0.46 note its `Id:` / `Schema:` /
+  `Source:` header lines (the path-derived id the readers already use, so
+  links keep resolving) without touching a byte of the body or its line
+  endings. The same notes are served by the authenticated
+  `GET /v1/vault/notes` (headers, newest first; `memory_only` drops seeded
+  `doc` pages), `GET /v1/vault/notes/{id}` and `DELETE /v1/vault/notes/{id}`
+  (which also drops the note's RAG chunks and reports `forgotten`); all
+  three read the process home only and match ids against the notes' own
+  `Id:` lines, never as paths. `POST /v1/vault/memory` indexes the saved
+  note through the engine's admission and returns `indexed`.
+- **Session cost facts for the pill.** `budget.hourly_rate_usd` (optional,
+  never guessed; `nvh config set budget.hourly_rate_usd 2.10`) and
+  `GET /v1/budget/status?since=<epoch_ms>`, which adds `hourly_rate_usd`,
+  `daily_cost_known`, `platform` (device class and label, cloud, owned) and
+  a `session` block summing the machine-wide ledger since that instant:
+  `spend_usd` and `by_provider` from successful rows, `cost_known` the
+  catalog's verdict on every model that answered, `local_only` true only
+  when every provider was local and never because the sum is zero. A
+  `since` in epoch seconds is a 422 rather than a sum over the whole
+  ledger. Repository readers `get_spend_since` and `distinct_models_since`
+  back it.
+- **History and tools through the OpenAI-compatible handler.**
+  `/v1/chat/completions` and `/v1/proxy/chat/completions` accept `tools`,
+  `tool_choice`, `stream_options` and `response_format`, and message
+  `name`, `tool_calls` and `tool_call_id`; a native tool call comes back as
+  `message.tool_calls` with `finish_reason: "tool_calls"` (one
+  `delta.tool_calls` chunk on a stream), `stream_options.include_usage`
+  adds the usage-only chunk before `[DONE]`, and `GET /v1/proxy/health`
+  lists `standard_paths`, `tools` and `history` under `features`. Streams
+  through an OpenAI-compatible provider request
+  `stream_options.include_usage` whenever LiteLLM's parameter table says
+  the route takes it, so their ledger rows carry the provider's token
+  counts (the Wave A follow-up); a caller's own `stream_options` is never
+  overridden.
+- **Docs for all of it.** CONFIGURATION.md gains "Questions, memories and
+  images from the Wizard chat", the unattended-turn rule and the
+  `SCHEDULE_AUTO_TOOLS` roster, the schedule runner's prose, the
+  `NVH_SCHEDULER` / `NVH_SCHEDULER_POLL_S` rows, the budget fields and the
+  vault routes, with the regenerated `wizard-tools` and `wizard-meta`
+  blocks; INTEGRATIONS.md documents history forwarding and the tools
+  round-trip; WEBUI.md lists the `/schedules` and `/vault` APIs and the
+  pill's data source; ARCHITECTURE.md corrects "scheduler → jobs";
+  TESTING.md records the `NVH_SCHEDULER=0` autouse fixture. New tests:
+  `tests/test_imagegen.py`, `tests/test_schedule_runner.py`,
+  `tests/test_vault_notes_route.py`, `tests/test_cli_vault.py`,
+  `tests/test_repl_do_confirm.py`.
+
 ### Changed
 - **`--verify` honours `exclude_providers`, and is independent or not at
   all.** The cross-check takes the exclusion set the answer was produced
@@ -196,6 +308,43 @@
   directly; `nvh/core/voice.py`'s stale strings match the code
   (`nvh advisor add groq`; sox or arecord, nothing else is tried).
 
+- **`imagine` is confirm-class** (O3): the hosted image providers bill the
+  user's key, so `nvh do` and the REPL's `/do` ask before it runs (an
+  `Allow? [y/N]` prompt; the REPL gained the prompt in this wave), while
+  the agent loops that have no confirmation channel, a `mode: do` schedule
+  under `nvh schedule start` and `/v1/smart`, answer `Tool requires
+  approval: imagine` instead of generating. Any confirm-class tool with a
+  planner now shows its dry run on the card as `plan` (no pins folded, no
+  token minted).
+- **The shared OpenAI-compatible chat handler forwards a transcript as
+  history by default** (O12): the last `user` message is the prompt, every
+  `system` message joins the system prompt, and earlier turns, assistant
+  tool calls and tool results reach the model in order. Pre-0.46 flattened
+  the transcript into one `User:`/`Assistant:` string; the header
+  `x-nvhive-history: flatten` restores that, and council / throwdown and a
+  transcript with no trailing user turn still receive it.
+- **A schedule run that raises is recorded as `error`**, never as a
+  completed run; an `ask` run whose turn no model answered is `error` with
+  the reason, never `ok` with the offline helper's text; a schedule's
+  `advisor` is honoured on `ask` runs again; `convene` now convenes; a run
+  the server cancelled while stopping says so instead of "Install job
+  canceled by user"; and `nvh schedule add --mode do` warns that only the
+  CLI runner runs it. Writes to `schedules.json` inside the API process
+  hold one lock, and the runner re-reads the store at every write.
+- **Portraits go through the image planner.** `comfyui.generate_portrait`
+  is a shim over `render_image` (same `(bytes, suffix)` result and hint),
+  keeps a copy of each portrait under `outputs/images/avatars/`, and
+  reaches ComfyUI at the host and port nvHive recorded when it started it
+  instead of the default port. The avatar route plans first, so its error
+  reads `Image generation failed (<backend>): …`.
+- **`nvh serve --reload` runs no schedule runner** unless `NVH_SCHEDULER=1`
+  is exported first: a worker killed on every save would leave runs
+  interrupted and the lock to age out, so the reloader parent defaults the
+  variable to `0` and `nvh schedule start` is the runner for a dev session.
+- **tests/test_agent_library.py** derives the valid tool whitelist from the
+  registry roster instead of a hand-typed list; `tests/conftest.py` sets
+  `NVH_SCHEDULER=0` and `NVH_RAG_AUTO_PULL=0` for every test.
+
 ### Fixed
 - **`GET /v1/health` no longer calls an unknown bind host loopback.** When
   the app was not started by `run_server` (a bare
@@ -220,6 +369,29 @@
   made the platform tests that run next on a GPU box see a real GPU; the
   file now cold-starts that cache (autouse fixture).
 
+- **Two differently worded `ask_user` calls in one turn** no longer both
+  become cards, and a model re-emitting a confirm call with a server-pinned
+  argument no longer duplicates the card.
+- **A streamed multi-turn proxy request** no longer reaches the provider as
+  only the last user turn: the stream generator takes the same history the
+  blocking path does.
+- **Streamed calls through an OpenAI-compatible provider** no longer log
+  `0` input tokens when the provider can report usage (see Added).
+- **The schedule runner's lock** no longer reads stale during a long run, a
+  lock that exists but cannot be read counts as held rather than stale, and
+  the API server's loop no longer gives up until a restart when
+  `nvh schedule start` held the lock at startup: it waits and takes over
+  polling when the lock is released.
+- **One run per schedule at a time.** Run now on an in-flight schedule
+  answers 409 naming the job, the poll skips it, and the poll leaves a due
+  `mode: do` schedule for the CLI instead of failing it every interval.
+- **`GET /v1/budget/status?since=`** refuses a value in epoch seconds (422)
+  instead of summing the whole ledger; **`POST /v1/vault/memory`** indexes
+  with the engine's admission and survives a paused resource.
+- **The `scheduler` doctor row and `nvh schedule list`** name the
+  `schedules.json.corrupt-<timestamp>` file after a quarantine and the row
+  turns `warn` (the Wave A follow-up).
+
 ### Security
 - **Two routes that answered without the key now require it.**
   `POST /v1/anthropic/messages` (and its alias `/v1/anthropic/v1/messages`)
@@ -240,6 +412,44 @@
 - **The streamed-budget bypass is closed** (see Changed): a coding tool
   streaming through the proxy can no longer spend past `budget.hard_stop`
   unrecorded.
+
+- **Nothing unattended mints a token.** A scheduled Wizard turn runs with
+  no human present: it never calls a confirm or privileged tool, never
+  mints, plans or stores an approval token, and never asks a question
+  (`ask_user` is not offered to it). A confirm or privileged request the
+  profile's own whitelist allows is recorded on the run with its string
+  arguments passed through `redact_secrets` before any job event is
+  written, and a request outside the whitelist is refused like any other
+  call (`tests/test_schedule_runner.py` greps every byte under `jobs/`).
+  With a human present, a confirm or privileged call made in the same turn
+  as an `ask_user` question is held in `deferred_tool_calls`, with no card,
+  no plan and no token, instead of being surfaced beside an unanswered
+  question.
+- **Generated images, vault notes and schedules are served only through
+  `require_auth`.** `GET /v1/outputs/images/{scope}/{filename}` validates
+  `scope` and `filename` by regex and confines the resolved path to
+  `outputs/images/<scope>` (404 for `..`, a foreign scope, an unknown
+  suffix, an escaping symlink or a missing file); the `/v1/vault/notes`
+  routes take no `home_dir` and match ids against the notes' own `Id:`
+  lines; the seven `/v1/schedules` routes refuse `mode: do` with a 422
+  before anything is stored. A keyed deployment answers 401 to all of them
+  without the key.
+- **`remember` writes only under the process home's `vault/Wizard
+  Memory/`** (a model-supplied `home_dir` or `category` is dropped), refuses
+  a body carrying `approval_token` or the privileged terminal hint, and
+  runs `redact_secrets` over the note before it is written; pattern
+  redaction is best-effort, so the confirm card showing the note is the
+  check, and every record is listed and deletable through `/v1/vault/notes`
+  and `nvh vault forget <id>`.
+- **The `generate_image` profile pin cannot be chosen by the model**: an
+  unknown or missing profile is a refusal, never "no ceiling", and the card
+  pins the request's `home_dir` beside the profile so Run resolves the
+  profile the chat did. A ComfyUI runtime file naming a non-loopback host
+  is ignored by the probe and the renderers, so the image path stays local;
+  `upgrade_vault_note` refuses a path outside the vault; `/v1/smart`
+  refuses the confirm-class `imagine` and never bills an image key
+  unattended. SECURITY.md documents the pin's trust boundary and the
+  absolute `$NVH_HOME` paths API responses carry.
 
 ### Removed
 - **The pre-0.44 tool-call forms.** The agent loop no longer reads the

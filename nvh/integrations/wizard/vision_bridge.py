@@ -23,7 +23,11 @@ What the bridge adds is what the core tool never had:
        same directory ``shell`` mounts);
      - the screenshot temp dir (``tempfile.gettempdir()``), *direct children
        only* — the core ``screenshot`` tool writes ``tempfile.mktemp(suffix=
-       ".png")`` there and nothing else of ours does.
+       ".png")`` there and nothing else of ours does;
+     - ``$NVH_HOME/outputs/images/`` (``NVH_OUTPUTS``), where the Wizard's
+       ``generate_image`` tool and the profile-portrait generator save what
+       they render (:func:`nvh.integrations.imagegen.outputs_images_root`),
+       so a generated image can be looked at in the same chat.
 
    The check reuses :func:`nvh.core.agent_guardrails.check_path` (workspace
    boundary + system directory blocklist) per root, and the *resolved* path
@@ -179,6 +183,13 @@ def _screenshot_dir() -> Path:
     return Path(tempfile.gettempdir())
 
 
+def _outputs_images_root() -> Path:
+    """Where ``generate_image`` and the portrait generator save renders (``outputs/images``)."""
+    from nvh.integrations.imagegen import outputs_images_root
+
+    return outputs_images_root()
+
+
 def allowed_image_roots() -> list[Path]:
     """The resolved directories an image may be read from, in allowlist order.
 
@@ -186,7 +197,7 @@ def allowed_image_roots() -> list[Path]:
     substituted; duplicates (workspace inside the home) collapse.
     """
     roots: list[Path] = []
-    for lookup in (uploads_root, workspace_dir, _screenshot_dir):
+    for lookup in (uploads_root, workspace_dir, _screenshot_dir, _outputs_images_root):
         try:
             root = Path(lookup()).expanduser().resolve()
         except Exception as exc:  # pragma: no cover - defensive, env-specific

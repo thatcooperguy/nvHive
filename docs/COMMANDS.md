@@ -94,6 +94,7 @@ to an advisor, and a task-shaped bare prompt asks for an explicit `nvh do`.
 | `nvh model <command>` | Browse available models |
 | `nvh rag <command>` | Index documents locally and retrieve them for grounded answers (SQLite + Ollama embeddings under $NVH_HOME/rag). |
 | `nvh schedule <command>` | Schedule recurring AI tasks |
+| `nvh vault <command>` | The Markdown memory vault under $NVH_HOME/vault (status, notes, forget, upgrade) |
 | `nvh webhook <command>` | Manage webhook notifications |
 | `nvh workflow <command>` | Manage and run workflow pipelines |
 | `nvh workspace [ACTION] [PATHS]` | [beta] Manage multi-repo workspaces for cross-repo agent operations. |
@@ -293,8 +294,11 @@ to an advisor, and a task-shaped bare prompt asks for an explicit `nvh do`.
 | Command | Description |
 |---------|-------------|
 | `nvh schedule add PROMPT` | Add a recurring scheduled task. |
+| `nvh schedule disable TASK_ID` | Disable a scheduled task without removing it. |
+| `nvh schedule enable TASK_ID` | Enable a scheduled task so it becomes due again. |
 | `nvh schedule list` | List all scheduled tasks. |
 | `nvh schedule remove TASK_ID` | Remove a scheduled task. |
+| `nvh schedule run TASK_ID` | Run one scheduled task now (synchronously) and record the run on the schedule. |
 | `nvh schedule start` | Start the scheduler daemon (runs in foreground, polls for due tasks). |
 
 ### `nvh services`
@@ -305,6 +309,16 @@ to an advisor, and a task-shaped bare prompt asks for an explicit `nvh do`.
 | `nvh services smoke-test` | End-to-end "can the Wizard actually answer?" check. |
 | `nvh services start` | Boot the whole pipeline in order, with real health gates. |
 | `nvh services stop` | Stop the nvHive service stack — WebUI + API (+ optional Ollama). |
+
+### `nvh vault`
+
+| Command | Description |
+|---------|-------------|
+| `nvh vault forget NOTE_ID` | Remove one vault note and drop its RAG chunks. |
+| `nvh vault init` | Create the vault folder tree and seed the starter notes (idempotent). |
+| `nvh vault list` | List the vault's notes, newest first (headers only). |
+| `nvh vault status` | Show whether the vault is initialised, where it lives and how many notes it holds. |
+| `nvh vault upgrade` | Upgrade pre-0.46 vault notes in place: --add-ids inserts the three header lines, body untouched. |
 
 ### `nvh webhook`
 

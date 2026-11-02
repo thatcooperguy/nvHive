@@ -59,8 +59,11 @@ minute for PyPI.
    `ubuntu-24.04-arm` job (Python 3.12, the DGX Spark target), plus the
    typecheck, webui, security, build and mcp-v1 jobs; a red matrix is a
    release blocker. `migration.yml` (Windows and macOS migration contracts) fires on
-   any `main` push that touches `pyproject.toml`, so the version bump runs it
-   and it must be green too. `installer.yml` (installer contracts) runs on
+   any `main` push that touches `pyproject.toml` — so the version bump runs it
+   — or one of the storage files in its path filter (`nvh/config/settings.py`,
+   `nvh/storage/repository.py`, `nvh/integrations/workspace/storage.py`,
+   `migrate_legacy.py`, `tests/conftest.py` and the storage tests), and it
+   must be green too. `installer.yml` (installer contracts) runs on
    pushes to `main` and on pull requests that touch an installer or its
    harness (`install.sh`, `install.ps1`, `install-mac.sh`, `ci/*install*`,
    the workflow itself and `docs/TESTING.md`;

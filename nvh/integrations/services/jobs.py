@@ -116,8 +116,17 @@ def list_jobs(
     status: str | None = None,
     limit: int = 20,
     home_dir: str | Path | None = None,
+    schedule_id: str | None = None,
+    exclude_kind: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return recent jobs, newest first."""
+    """Return recent jobs, newest first.
+
+    Every filter is applied before ``limit``: ``kind`` / ``exclude_kind`` on
+    the job's kind (the Setup page passes ``exclude_kind="schedule-run"`` so
+    an hourly schedule never pushes its install jobs out of view), ``status``
+    on the reconciled status, and ``schedule_id`` on
+    ``request.schedule_id`` (a schedule's run log).
+    """
     jobs: list[dict[str, Any]] = []
     for path in sorted(jobs_root(home_dir).glob("*.json"), reverse=True):
         try:
@@ -126,7 +135,11 @@ def list_jobs(
             continue
         if kind and job.get("kind") != kind:
             continue
+        if exclude_kind and job.get("kind") == exclude_kind:
+            continue
         if status and job.get("status") != status:
+            continue
+        if schedule_id and (job.get("request") or {}).get("schedule_id") != schedule_id:
             continue
         jobs.append(with_recent_events(job, home_dir=home_dir))
         if len(jobs) >= limit:
@@ -254,6 +267,37 @@ def append_event(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     return event
 
 
+def _interrupted_message(kind: str) -> str:
+    """The wording an orphaned job gets, by kind: a schedule run is not retried by hand."""
+    if kind == "schedule-run":
+        return (
+            "Server restarted or disconnected while this run was in flight; "
+            "the schedule will run again at its next interval."
+        )
+    return (
+        "Server restarted or disconnected while this job was running. "
+        "Retry to resume setup."
+    )
+
+
+def _canceled_message(kind: str, *, by_user: bool) -> str:
+    """The wording a canceled job gets, by kind and by who canceled it.
+
+    ``by_user`` is the ``cancel_requested`` flag (``POST /v1/jobs/{id}/cancel``);
+    otherwise the consumer task itself was cancelled — the server stopping
+    while a schedule run was in flight — and nobody clicked anything, so a
+    schedule run says so and names what happens next.
+    """
+    if kind == "schedule-run":
+        if by_user:
+            return "Run canceled by user."
+        return (
+            "Run canceled before it finished (the server stopped); "
+            "the schedule will run again at its next interval."
+        )
+    return "Install job canceled by user."
+
+
 def reconcile_job(
     job: dict[str, Any],
     *,
@@ -265,10 +309,7 @@ def reconcile_job(
     if job["id"] in _TASKS and not _TASKS[job["id"]].done():
         return job
     job["status"] = "interrupted"
-    job["message"] = (
-        "Server restarted or disconnected while this job was running. "
-        "Retry to resume setup."
-    )
+    job["message"] = _interrupted_message(str(job.get("kind", "")))
     job["updated_at"] = _now()
     job["completed_at"] = job["updated_at"]
     logger.warning(
@@ -282,8 +323,10 @@ async def _consume_job_events(
     job_id: str,
     source_factory: Callable[[], AsyncIterator[dict[str, Any]]],
 ) -> None:
+    kind = ""
     try:
         job = load_job(job_id, reconcile=False, include_recent_events=False)
+        kind = str(job.get("kind", "") or "")
         job["status"] = "running"
         job["started_at"] = job.get("started_at") or _now()
         job["message"] = "Starting"
@@ -307,7 +350,7 @@ async def _consume_job_events(
                             {
                                 "event": "canceled",
                                 "status": "canceled",
-                                "message": "Install job canceled by user.",
+                                "message": _canceled_message(kind, by_user=True),
                             },
                         )
                     saw_terminal = True
@@ -334,12 +377,21 @@ async def _consume_job_events(
                 },
             )
     except asyncio.CancelledError:
+        # The consumer task was cancelled: by ``cancel_job`` (the user asked —
+        # ``cancel_requested`` is set first) or by the process itself (the
+        # lifespan stopping the schedule runner, Ctrl+C on `nvh schedule
+        # start`), which is not a user click and says so for a schedule run.
+        by_user = False
+        try:
+            by_user = bool(load_job(job_id, reconcile=False, include_recent_events=False).get("cancel_requested"))
+        except Exception:  # the record is gone; the generic wording is the honest one
+            pass
         append_event(
             job_id,
             {
                 "event": "canceled",
                 "status": "canceled",
-                "message": "Install job canceled by user.",
+                "message": _canceled_message(kind, by_user=by_user),
             },
         )
         raise
@@ -374,6 +426,27 @@ def start_job(
     return load_job(job["id"], reconcile=False)
 
 
+def start_job_with_id(
+    *,
+    kind: str,
+    title: str,
+    request: dict[str, Any] | None,
+    source_factory: Callable[[str], AsyncIterator[dict[str, Any]]],
+) -> dict[str, Any]:
+    """:func:`start_job` for a source that needs its own job id.
+
+    The factory receives the new job's id before the source starts — the
+    schedule runner records it on the schedule (``mark_run(job_id=...)``)
+    from inside the source. Everything else (the record, the consumer task,
+    cancellation) is ``start_job``.
+    """
+    job = create_job(kind=kind, title=title, request=request)
+    job_id = str(job["id"])
+    task = asyncio.create_task(_consume_job_events(job_id, lambda: source_factory(job_id)))
+    _TASKS[job_id] = task
+    return load_job(job_id, reconcile=False)
+
+
 def cancel_job(job_id: str) -> dict[str, Any]:
     """Request cancellation for a running job."""
     job = load_job(job_id, reconcile=False, include_recent_events=False)
@@ -392,7 +465,7 @@ def cancel_job(job_id: str) -> dict[str, Any]:
             {
                 "event": "canceled",
                 "status": "canceled",
-                "message": "Install job canceled by user.",
+                "message": _canceled_message(str(job.get("kind", "") or ""), by_user=True),
             },
         )
     return load_job(job_id, reconcile=False)

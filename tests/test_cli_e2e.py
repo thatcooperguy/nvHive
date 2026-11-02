@@ -287,6 +287,7 @@ class TestCLISubcommandHelp:
         "rag",
         "knowledge",  # 0.42 hidden alias of rag
         "schedule",
+        "vault",
         "template",
         "webhook",
         "workflow",

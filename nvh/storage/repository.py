@@ -582,6 +582,59 @@ async def get_spend_by_provider(period: str = "daily") -> dict[str, Decimal]:
         return {row[0]: Decimal(str(row[1])) for row in result.all()}
 
 
+def _since_utc(since: datetime) -> datetime:
+    """``since`` as an aware UTC datetime; a naive value is read as UTC.
+
+    ``QueryLog.created_at`` is written by ``_utcnow`` (aware UTC) and SQLite
+    stores it without the offset, so a bound parameter in another zone would
+    compare wrongly unless it is converted first.
+    """
+    if since.tzinfo is None:
+        return since.replace(tzinfo=UTC)
+    return since.astimezone(UTC)
+
+
+async def get_spend_since(since: datetime) -> Decimal:
+    """Sum of ``cost_usd`` over the successful rows logged at or after ``since``.
+
+    The session total behind ``GET /v1/budget/status?since=``: machine-wide
+    (CLI, WebUI, proxy and scheduled runs all land in the one ledger), only
+    ``status == "success"`` rows, so a refused or failed call never counts as
+    spend. A model the catalog cannot price logs ``cost_usd`` 0 — the caller
+    reads :func:`distinct_models_since` to tell "free" from "unknown".
+    """
+    start = _since_utc(since)
+    async with get_session() as session:
+        result = await session.execute(
+            select(func.coalesce(func.sum(QueryLog.cost_usd), 0)).where(
+                QueryLog.created_at >= start,
+                QueryLog.status == "success",
+            )
+        )
+        value = result.scalar_one()
+        return Decimal(str(value)) if value else Decimal("0")
+
+
+async def distinct_models_since(since: datetime) -> list[tuple[str, str]]:
+    """The distinct ``(model, provider)`` pairs with at least one row at or after ``since``.
+
+    Every row counts, whatever its status: a cloud call that failed still
+    happened. The caller derives ``cost_known`` and ``local_only`` per pair
+    from the catalog (``nvh.api.server._catalog_cost_known``,
+    ``PROVIDER_SPECS[provider].is_local``) — this module never imports it.
+    Sorted by provider then model.
+    """
+    start = _since_utc(since)
+    async with get_session() as session:
+        result = await session.execute(
+            select(QueryLog.model, QueryLog.provider)
+            .where(QueryLog.created_at >= start)
+            .distinct()
+            .order_by(QueryLog.provider, QueryLog.model)
+        )
+        return [(str(row[0] or ""), str(row[1] or "")) for row in result.all()]
+
+
 async def get_query_count(period: str = "daily") -> int:
     now = datetime.now(UTC)
     if period == "daily":

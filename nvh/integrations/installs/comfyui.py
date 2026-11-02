@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 COMFYUI_REPO_URL = "https://github.com/comfyanonymous/ComfyUI.git"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8188
+#: The only hosts nvHive starts ComfyUI on, probes, or renders through: a
+#: recorded runtime host outside this set is ignored (``detect_comfyui``) and
+#: refused (``start_comfyui``), so a planted ``comfyui-service.json`` can never
+#: point the portrait or image renderer at another machine.
+LOOPBACK_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "localhost"})
 
 
 @dataclass(frozen=True)
@@ -418,13 +423,27 @@ def detect_comfyui(
     *,
     check_http: bool = True,
 ) -> dict[str, Any]:
-    """Return local ComfyUI installation and runtime status."""
+    """Return local ComfyUI installation and runtime status.
+
+    The recorded runtime ``host``/``port`` (``comfyui-service.json``, written
+    by ``start_comfyui``) are honoured for the probe — except a host outside
+    :data:`LOOPBACK_HOSTS`, which nvHive never wrote itself: it is ignored
+    (one warning) so the probe, and every renderer that follows it, stays on
+    loopback.
+    """
     root = comfyui_root(home_dir=home_dir)
     runtime = _read_runtime_metadata(root)
     if port == DEFAULT_PORT and isinstance(runtime.get("port"), int):
         port = int(runtime["port"])
     if host == DEFAULT_HOST and isinstance(runtime.get("host"), str):
-        host = str(runtime["host"])
+        recorded = str(runtime["host"])
+        if recorded in LOOPBACK_HOSTS:
+            host = recorded
+        else:
+            logger.warning(
+                "ComfyUI runtime metadata at %s names host %r; only loopback is used (keeping %s)",
+                _runtime_file(root), recorded, DEFAULT_HOST,
+            )
     app_dir = comfyui_app_dir(root)
     venv_python = comfyui_venv_python(root)
     runtime_python = comfyui_python(root)
@@ -860,7 +879,7 @@ def start_comfyui(
     home_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Start ComfyUI in the background and return launch metadata."""
-    if host not in {"127.0.0.1", "localhost"}:
+    if host not in LOOPBACK_HOSTS:
         raise ValueError("ComfyUI auto-start is restricted to localhost.")
 
     root = comfyui_root(home_dir)
@@ -952,18 +971,52 @@ def start_comfyui(
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Portrait generation — minimal HTTP wrapper used by the agent-profile UI
+# Portrait generation — a shim over nvh.integrations.imagegen (0.46)
 # ────────────────────────────────────────────────────────────────────────────
 
 
-# NVIDIA-hosted image endpoints live under integrate.api.nvidia.com (or
-# api.nvcf.nvidia.com depending on account tier). We probe via env so users
-# can swap to any image model they have access to without a code change.
-NVIDIA_IMAGE_ENDPOINT_ENV = "NVH_NVIDIA_IMAGE_ENDPOINT"
-NVIDIA_IMAGE_MODEL_ENV = "NVH_NVIDIA_IMAGE_MODEL"
-_DEFAULT_NVIDIA_IMAGE_ENDPOINT = (
-    "https://integrate.api.nvidia.com/v1/genai/stabilityai/sdxl-turbo"
+# The renderers and their env/default constants moved to
+# nvh/integrations/imagegen.py in 0.46 so the Wizard's ``generate_image`` tool
+# and this portrait path share one planner. They are re-exported here lazily
+# (PEP 562) so ``from nvh.integrations.installs.comfyui import
+# _generate_portrait_nvidia`` and friends keep resolving to the same objects
+# without importing imagegen at module load: imagegen imports this module for
+# ``detect_comfyui``, and a top-level import in either direction is a cycle.
+_IMAGEGEN_REEXPORTS: tuple[str, ...] = (
+    "NVIDIA_IMAGE_ENDPOINT_ENV",
+    "NVIDIA_IMAGE_MODEL_ENV",
+    "_DEFAULT_NVIDIA_IMAGE_ENDPOINT",
+    "COMFYUI_CHECKPOINT_ENV",
+    "_DEFAULT_COMFYUI_CHECKPOINT",
+    "_comfyui_portrait_workflow",
+    "_generate_portrait_comfyui",
+    "_generate_portrait_nvidia",
 )
+
+
+def __getattr__(name: str) -> Any:
+    if name in _IMAGEGEN_REEXPORTS:
+        from nvh.integrations import imagegen
+
+        return getattr(imagegen, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_IMAGEGEN_REEXPORTS))
+
+
+#: What ``generate_portrait`` raises when no backend exists — the four-bullet
+#: hint the Create-Agent modal shows so the user falls back to the upload path.
+PORTRAIT_UNAVAILABLE_HINT = (
+    "No portrait generator available. Either:\n"
+    "  • set NVAPI_KEY to use NVIDIA-hosted image gen,\n"
+    "  • start ComfyUI locally and re-try,\n"
+    "  • upload an image via POST /v1/wizard/profiles/{name}/avatar/upload,\n"
+    "  • or drop a PNG/JPG at $NVH_HOME/agent-profiles/avatars/<name>.<ext>."
+)
+#: The ``outputs/images/<scope>`` folder portrait renders are kept in.
+PORTRAIT_SCOPE = "avatars"
 
 
 async def generate_portrait(
@@ -976,248 +1029,32 @@ async def generate_portrait(
 ) -> tuple[bytes, str]:
     """Generate a portrait image. Returns ``(image_bytes, file_extension)``.
 
-    Resolution order:
-      1. ``NVAPI_KEY`` set → NVIDIA-hosted image endpoint. Zero install,
-         ties directly to the rootless-NVIDIA wedge. Preferred path on
-         cloud GPU desktops where the user already has an NVIDIA account.
-      2. Local ComfyUI — not wired yet (needs a default workflow JSON for
-         the installed checkpoint). Raises NotImplementedError so the UI
-         falls back to the upload path with a clear hint.
+    A shim over :func:`nvh.integrations.imagegen.render_image`, so the
+    resolution order is the planner's (``plan_image_backend``):
 
-    Both branches surface clean errors via the existing avatar/generate
-    endpoint envelope so the modal shows a meaningful inline message.
+      1. ``NVAPI_KEY`` set → the NVIDIA-hosted image endpoint. Zero install,
+         ties directly to the rootless-NVIDIA wedge.
+      2. else local ComfyUI at the host/port recorded when nvHive started it
+         (``detect_comfyui()``, honouring ``home_dir``), rendering the SDXL
+         workflow for ``NVH_COMFYUI_CHECKPOINT``.
+      3. else ``NotImplementedError`` with :data:`PORTRAIT_UNAVAILABLE_HINT`
+         so the UI falls back to the upload path with a clear hint.
+
+    The rendered file is also kept under ``outputs/images/avatars/`` like
+    every other generated image. Backend errors surface through the existing
+    avatar/generate envelope so the modal shows a meaningful inline message.
     """
-    nvapi_key = os.environ.get("NVAPI_KEY", "").strip()
-    if nvapi_key:
-        return await _generate_portrait_nvidia(
-            prompt, nvapi_key, width=width, height=height, timeout=timeout,
+    from nvh.integrations import imagegen
+
+    try:
+        result = await imagegen.render_image(
+            prompt,
+            home_dir=home_dir,
+            width=width,
+            height=height,
+            scope=PORTRAIT_SCOPE,
+            timeout=timeout,
         )
-    # Fall back to a locally-running ComfyUI if reachable. We probe the
-    # default host/port and submit a minimal SDXL workflow. Users who run a
-    # different checkpoint can override NVH_COMFYUI_CHECKPOINT.
-    if _is_http_reachable():
-        return await _generate_portrait_comfyui(
-            prompt, width=width, height=height, timeout=timeout,
-        )
-    raise NotImplementedError(
-        "No portrait generator available. Either:\n"
-        "  • set NVAPI_KEY to use NVIDIA-hosted image gen,\n"
-        "  • start ComfyUI locally and re-try,\n"
-        "  • upload an image via POST /v1/wizard/profiles/{name}/avatar/upload,\n"
-        "  • or drop a PNG/JPG at $NVH_HOME/agent-profiles/avatars/<name>.<ext>.",
-    )
-
-
-COMFYUI_CHECKPOINT_ENV = "NVH_COMFYUI_CHECKPOINT"
-_DEFAULT_COMFYUI_CHECKPOINT = "sd_xl_base_1.0.safetensors"
-
-
-def _comfyui_portrait_workflow(
-    prompt: str,
-    *,
-    checkpoint: str,
-    width: int,
-    height: int,
-    seed: int,
-) -> dict[str, Any]:
-    """Return a minimal SDXL ComfyUI workflow as a JSON-serializable dict.
-
-    Five nodes — checkpoint, latent, positive prompt, negative prompt,
-    sampler — plus VAE decode and SaveImage. Matches the default
-    SDXL workflow ComfyUI ships in its examples, just trimmed.
-    """
-    return {
-        "1": {
-            "class_type": "CheckpointLoaderSimple",
-            "inputs": {"ckpt_name": checkpoint},
-        },
-        "2": {
-            "class_type": "EmptyLatentImage",
-            "inputs": {"width": width, "height": height, "batch_size": 1},
-        },
-        "3": {
-            "class_type": "CLIPTextEncode",
-            "inputs": {"text": prompt, "clip": ["1", 1]},
-        },
-        "4": {
-            "class_type": "CLIPTextEncode",
-            "inputs": {
-                "text": (
-                    "blurry, lowres, text, watermark, signature, frame, "
-                    "deformed, extra limbs, jpeg artifacts"
-                ),
-                "clip": ["1", 1],
-            },
-        },
-        "5": {
-            "class_type": "KSampler",
-            "inputs": {
-                "model": ["1", 0],
-                "positive": ["3", 0],
-                "negative": ["4", 0],
-                "latent_image": ["2", 0],
-                "seed": seed,
-                "steps": 28,
-                "cfg": 6.5,
-                "sampler_name": "dpmpp_2m",
-                "scheduler": "karras",
-                "denoise": 1.0,
-            },
-        },
-        "6": {
-            "class_type": "VAEDecode",
-            "inputs": {"samples": ["5", 0], "vae": ["1", 2]},
-        },
-        "7": {
-            "class_type": "SaveImage",
-            "inputs": {"images": ["6", 0], "filename_prefix": "nvh_portrait"},
-        },
-    }
-
-
-async def _generate_portrait_comfyui(
-    prompt: str,
-    *,
-    width: int,
-    height: int,
-    timeout: float,
-    host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
-) -> tuple[bytes, str]:
-    """Submit the workflow to ComfyUI's HTTP API, poll until complete, fetch
-    the image bytes via /view. Returns ``(png_bytes, ".png")``.
-
-    Polls ``/history/{prompt_id}`` at 1 Hz with a hard ``timeout`` ceiling.
-    On any error we raise with the upstream status/message so the calling
-    endpoint can show a clean inline error.
-    """
-    import json as _json
-    import secrets
-
-    import httpx
-
-    base = _status_url(host, port)
-    checkpoint = os.environ.get(COMFYUI_CHECKPOINT_ENV, _DEFAULT_COMFYUI_CHECKPOINT)
-    seed = secrets.randbits(63)
-    workflow = _comfyui_portrait_workflow(
-        prompt, checkpoint=checkpoint, width=width, height=height, seed=seed,
-    )
-    client_id = f"nvh-{secrets.token_hex(4)}"
-
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        # 1. Submit the prompt — ComfyUI returns a prompt_id we poll on.
-        submit = await client.post(
-            f"{base}/prompt",
-            content=_json.dumps({"prompt": workflow, "client_id": client_id}),
-            headers={"Content-Type": "application/json"},
-        )
-        if submit.status_code >= 400:
-            raise RuntimeError(f"ComfyUI submit failed: HTTP {submit.status_code} — {submit.text[:200]}")
-        sub_data = submit.json()
-        prompt_id = sub_data.get("prompt_id")
-        if not prompt_id:
-            raise RuntimeError(f"ComfyUI did not return a prompt_id: {sub_data}")
-
-        # 2. Poll /history/<id> until the workflow produces an output image.
-        import asyncio
-
-        deadline = asyncio.get_event_loop().time() + timeout
-        image_info: dict[str, Any] | None = None
-        while asyncio.get_event_loop().time() < deadline:
-            hist = await client.get(f"{base}/history/{prompt_id}")
-            if hist.status_code == 200:
-                payload = hist.json()
-                entry = payload.get(prompt_id) or {}
-                outputs = entry.get("outputs") or {}
-                # Find the first node that produced an image.
-                for _node_id, node_out in outputs.items():
-                    imgs = node_out.get("images") or []
-                    if imgs:
-                        image_info = imgs[0]
-                        break
-                if image_info is not None:
-                    break
-            await asyncio.sleep(1.0)
-        if image_info is None:
-            raise RuntimeError(f"ComfyUI workflow {prompt_id} produced no image within {int(timeout)}s")
-
-        # 3. Fetch the raw image bytes via /view.
-        params = {
-            "filename": image_info.get("filename", ""),
-            "subfolder": image_info.get("subfolder", ""),
-            "type": image_info.get("type", "output"),
-        }
-        view = await client.get(f"{base}/view", params=params)
-        if view.status_code >= 400:
-            raise RuntimeError(f"ComfyUI /view failed: HTTP {view.status_code}")
-        # ComfyUI typically returns PNG; the filename suffix backs that up.
-        suffix = ".png"
-        fname = image_info.get("filename") or ""
-        if isinstance(fname, str) and "." in fname:
-            ext = fname.rsplit(".", 1)[-1].lower()
-            if ext in ("png", "jpg", "jpeg", "webp"):
-                suffix = f".{'jpg' if ext == 'jpeg' else ext}"
-        return view.content, suffix
-
-
-async def _generate_portrait_nvidia(
-    prompt: str,
-    api_key: str,
-    *,
-    width: int,
-    height: int,
-    timeout: float,
-) -> tuple[bytes, str]:
-    """Call NVIDIA-hosted image-gen API and return PNG bytes.
-
-    Tolerates the three common response shapes (raw base64, Stability-style
-    artifacts, OpenAI-style url+b64). Raises with the upstream status/body
-    on failure so the caller's envelope surfaces it to the user.
-    """
-    import base64
-    import json as _json
-
-    import httpx
-
-    endpoint = os.environ.get(NVIDIA_IMAGE_ENDPOINT_ENV, _DEFAULT_NVIDIA_IMAGE_ENDPOINT)
-    payload: dict[str, Any] = {
-        "prompt": prompt,
-        "width": width,
-        "height": height,
-        "samples": 1,
-        "steps": 30,
-    }
-    model_override = os.environ.get(NVIDIA_IMAGE_MODEL_ENV)
-    if model_override:
-        payload["model"] = model_override
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(endpoint, headers=headers, content=_json.dumps(payload))
-        if resp.status_code >= 400:
-            raise RuntimeError(f"NVIDIA image API {resp.status_code}: {resp.text[:200]}")
-        data = resp.json()
-        b64: str | None = None
-        if isinstance(data.get("image"), str):
-            b64 = data["image"]
-        elif isinstance(data.get("artifacts"), list) and data["artifacts"]:
-            first = data["artifacts"][0]
-            if isinstance(first, dict):
-                b64 = first.get("base64")
-        elif isinstance(data.get("data"), list) and data["data"]:
-            entry = data["data"][0]
-            if isinstance(entry, dict):
-                if isinstance(entry.get("b64_json"), str):
-                    b64 = entry["b64_json"]
-                elif isinstance(entry.get("url"), str):
-                    url_resp = await client.get(entry["url"])
-                    url_resp.raise_for_status()
-                    return url_resp.content, ".png"
-        if not b64:
-            raise RuntimeError(
-                f"NVIDIA image response shape not recognized: keys={list(data.keys())[:8]}",
-            )
-        return base64.b64decode(b64), ".png"
+    except imagegen.ImageGenerationUnavailable as exc:
+        raise NotImplementedError(PORTRAIT_UNAVAILABLE_HINT) from exc
+    return Path(result.path).read_bytes(), result.suffix

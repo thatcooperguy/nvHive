@@ -32,13 +32,16 @@ run). Test processes use LiteLLM's bundled model-price map
 `tests/` is flat: one `test_<subject>.py` per module or feature, no
 subdirectories. `tests/conftest.py` holds the shared `db` fixture (a fresh
 SQLite database bound to the repository for one async test) and its
-synchronous twin `sync_db` for `TestClient`-driven tests, plus three autouse
+synchronous twin `sync_db` for `TestClient`-driven tests, plus four autouse
 fixtures every test gets: a throwaway home (`NVH_HOME`, `Path.home()`,
 `HOME` / `USERPROFILE` and the storage knobs all point away from the
 developer's; a module that must see the real home sets `HERMETIC_HOME =
 False` at module level), seeded platform facts (no `sudo -n` / `nvidia-smi`
-probes) and a stubbed local-daemon probe (`HERMETIC_LOCAL_PROBE = False`
-opts a module out). A module fixture must not reuse the name
+probes), a stubbed local-daemon probe (`HERMETIC_LOCAL_PROBE = False`
+opts a module out) and `NVH_SCHEDULER=0`, so no `TestClient` lifespan starts
+the API's schedule runner (also set at import time, so the live-uvicorn
+subprocess inherits it; a test that wants the runner sets `1` itself and
+patches `nvh.integrations.services.schedule_runner.run_loop`). A module fixture must not reuse the name
 `_hermetic_home`: it would shadow the conftest one and silently skip the
 patching. Everything else lives in the file that needs it. When a module is deleted its test file goes
 with it; when a module is renamed the test file is renamed too. A handful of
@@ -69,8 +72,10 @@ files are guards rather than unit tests:
 - **API** - FastAPI's `TestClient` runs `nvh.api.server:app` in-process
   (`test_api.py`, `test_auth.py`, `test_chat_history.py`, ...).
 - **Live server** - `test_live_api.py` spawns `uvicorn` on a free port and
-  probes `/v1/health`, CORS and a WebSocket upgrade; this is the only place
-  lifespan startup runs for real.
+  probes `/v1/health`, CORS and a WebSocket upgrade. `with TestClient(app)`
+  also runs the lifespan in-process (`test_api_server_endpoints.py`,
+  `test_server_lifespan_keys.py`); either way the platform warm-up and the
+  schedule runner stay off unless a test turns them on.
 - **CLI** - `test_cli_inprocess.py` drives the Typer app with `CliRunner`;
   `test_cli_e2e.py` spawns the `nvh` console script (`encoding="utf-8",
   errors="replace"` - copy that on Windows).
@@ -140,7 +145,8 @@ excluded from the coverage metric and covered by the subprocess tests instead.
 - Regenerate `docs/COMMANDS.md` when you add, rename or hide a command, and
   keep counts out of prose: the parity tests will tell you if you forgot.
   The same goes for the other generators: `scripts/gen_providers_doc.py`,
-  `scripts/gen_models_doc.py` and `scripts/gen_capabilities.py` each take
+  `scripts/gen_models_doc.py`, `scripts/gen_capabilities.py` and
+  `scripts/gen_config_doc.py` each take
   `--check` (exit 1 when the committed file is stale) and their parity tests
   run exactly that.
 - A test that touches the model catalog resets every singleton it used:

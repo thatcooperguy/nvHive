@@ -157,6 +157,22 @@ WIZARD_CORE_AUTO_TOOLS: frozenset[str] = frozenset({
     "diagnose", "refresh_models", "rag_ask_vault",
 })
 
+# Dialogue tools (0.46): not a capability. ``ask_user`` executes nothing on
+# the server and has no machine side effect — the turn ends with a question
+# card and the answer is the user's next message — so it is offered to every
+# profile with a whitelist, ``strict-tools`` included (owner decision O10;
+# the one documented exception to "a strict-tools profile keeps its whitelist
+# exactly"), and never on an unattended turn, where nobody would answer
+# (:func:`_effective_whitelist`).
+DIALOGUE_TOOLS: frozenset[str] = frozenset({"ask_user"})
+
+# The profile name the server pins onto a confirm card's ``arguments`` when
+# the turn has no specialist (``prof.profile_name`` is ``None``): the general
+# Wizard, which carries no per-turn cost ceiling. A handler that reads the
+# pin (``generate_image``) accepts exactly this sentinel or a name
+# ``get_profile`` resolves; anything else is a refusal, never "no ceiling".
+GENERAL_WIZARD_PROFILE = "wizard"
+
 # Schema version of the ``<!-- wizard-meta: {...} -->`` tail that
 # :func:`_persist_wizard_turn` appends to every assistant row it writes.
 # Bump it when a key changes meaning or shape; adding a key is not a bump
@@ -184,11 +200,15 @@ WIZARD_META_KEYS: tuple[tuple[str, str], ...] = (
                         "local-only refusal reason."),
     ("iterations", "LLM round-trips attempted in the turn (`0` when no model was called)."),
     ("tool_calls", "Confirm-class calls surfaced to the user as cards, without their `approval_token` and "
-                   "`approval_expires_at`."),
+                   "`approval_expires_at`; a confirm card whose tool has a planner carries its `plan` and the "
+                   "server-pinned `arguments.profile` (plus `arguments.profile_home` when the turn had a "
+                   "`home_dir`); on an unattended turn each carries `unattended: true`, no plan, redacted "
+                   "string arguments, and only a tool the profile's whitelist allows is recorded."),
     ("tool_results", "Outcomes of the auto-class tools the server ran, plus whitelist refusals "
                      "(`not_allowed: true`)."),
-    ("deferred_tool_calls", "Auto-class calls the loop did not run, each with a `reason` (follow-up disabled, "
-                            "iteration cap, cost ceiling)."),
+    ("deferred_tool_calls", "Calls the loop did not run, each with a `reason` (follow-up disabled, iteration "
+                            "cap, cost ceiling, question pending — a second `ask_user` in one turn, or any "
+                            "confirm or privileged call made in the same turn as a question)."),
     ("cost_usd", "LLM-answered turns only: the turn's completions summed, in USD (`0` when the provider "
                  "reported no cost)."),
     ("cost_known", "LLM-answered turns only: whether `cost_usd` is a price (the catalog knows the model) or a "
@@ -223,11 +243,32 @@ LOCAL_PROBE_TTL_S = 30.0
 LOCAL_PROBE_NEGATIVE_TTL_S = 5.0
 LOCAL_PROBE_INVALIDATING_TOOLS: frozenset[str] = frozenset({"refresh_models", "repair_workspace"})
 
+# The read-only roster an *unattended* turn (the schedule runner, design §6)
+# may run on its own — derived, never typed: the general Wizard's core tools
+# minus anything that restarts the daemon or rewrites the workspace
+# (``refresh_models`` is in both sets, which is what keeps it out of a
+# timer), plus the stock read-only lookups and dry runs. Every member is an
+# auto-class tool of ``default_registry()`` (tests pin it) and the set is
+# disjoint from ``LOCAL_PROBE_INVALIDATING_TOOLS`` and ``DIALOGUE_TOOLS``.
+# An unattended turn's effective whitelist is the profile's ``tools_allowed``
+# intersected with this roster (the roster itself when the profile has
+# none); the API shows it on the schedules page as ``runner.tools``.
+_SCHEDULE_AUTO_EXTRA: frozenset[str] = frozenset({
+    "web_search", "rag_ask", "system_settings_get", "system_settings_plan", "playbook_list", "playbook_plan",
+})
+SCHEDULE_AUTO_TOOLS: frozenset[str] = (WIZARD_CORE_AUTO_TOOLS - LOCAL_PROBE_INVALIDATING_TOOLS) | _SCHEDULE_AUTO_EXTRA
+
 # ``reason`` values on ``deferred_tool_calls`` entries — auto-class calls the
 # loop did not execute. The UI renders them as a trace; it never runs them.
 DEFER_MAX_ITERATIONS = "max_iterations"
 DEFER_FOLLOWUP_DISABLED = "followup_disabled"
 DEFER_COST_CEILING = "cost_ceiling"
+# A second ``ask_user`` in one turn: only the first becomes a question card
+# (one question, then stop — design §1), the rest are recorded here — and so
+# is every confirm or privileged call the model made beside the question: an
+# action the model itself made conditional on an unanswered question is never
+# surfaced as an approvable card in the same turn (:func:`_hold_for_question`).
+DEFER_QUESTION_PENDING = "question_pending"
 
 
 def _autofold_enabled() -> bool:
@@ -478,13 +519,43 @@ def _tool_not_allowed(name: str, profile_name: str | None) -> dict[str, Any]:
     }
 
 
+def _effective_whitelist(
+    tools_allowed: Collection[str] | None, *, unattended: bool,
+) -> frozenset[str] | None:
+    """The whitelist both tool filters apply for one turn.
+
+    A human-attended turn with a whitelist is offered the dialogue tools on
+    top of it — ``strict-tools`` profiles too, an explicit exception to the
+    "keeps its whitelist exactly" rule (O10): ``ask_user`` executes nothing,
+    so a persona defined by what it must not *do* loses nothing by being
+    able to *ask*. ``None`` (no whitelist) stays ``None``.
+
+    An unattended turn (the schedule runner) runs the profile's whitelist
+    intersected with :data:`SCHEDULE_AUTO_TOOLS` — the roster itself when the
+    profile has none — and never a dialogue tool: nobody is there to answer,
+    and a question re-asked every interval would pay a completion each time.
+    Applied once in :func:`_prepare_turn`, so the catalog the model sees
+    (:func:`_filter_tool_schemas`), the calls it may make
+    (:func:`_split_by_whitelist`) and the execution gate
+    (:func:`_run_auto_tool`) all read the same set.
+    """
+    if unattended:
+        base = SCHEDULE_AUTO_TOOLS if tools_allowed is None else frozenset(tools_allowed) & SCHEDULE_AUTO_TOOLS
+        return base - DIALOGUE_TOOLS
+    if tools_allowed is None:
+        return None
+    return frozenset(tools_allowed) | DIALOGUE_TOOLS
+
+
 def _filter_tool_schemas(
     schemas: list[dict[str, Any]], tools_allowed: Collection[str] | None,
 ) -> list[dict[str, Any]]:
     """Restrict the tool catalog shown to the model to the profile whitelist.
 
     ``None`` means "no whitelist" (all tools); an empty collection means the
-    model sees no tools at all.
+    model sees no tools at all. ``tools_allowed`` is the turn's *effective*
+    whitelist (:func:`_effective_whitelist`): the dialogue tools are already
+    in it on an attended turn and out of it on an unattended one.
     """
     if tools_allowed is None:
         return schemas
@@ -501,6 +572,8 @@ def _split_by_whitelist(
     ``refused_results`` are ready-made ``tool_results`` entries so a call the
     profile forbids is recorded honestly instead of leaking into the
     ``tool_calls`` / ``confirm_required`` payload the UI would act on.
+    ``tools_allowed`` is the turn's effective whitelist
+    (:func:`_effective_whitelist`), dialogue tools included or excluded by it.
     """
     if tools_allowed is None:
         return tool_calls, []
@@ -541,30 +614,101 @@ def _split_by_safety_class(
     return confirm, auto
 
 
-def _requested_arguments(call: dict[str, Any]) -> dict[str, Any]:
-    """A call's arguments as the model requested them — the planner's pins taken back out.
-
-    A surfaced privileged call carries the card's arguments, which include
-    whatever its plan pinned (``plan.pinned_arguments``); identity for
-    de-duplication is the model's own call.
-    """
-    arguments = dict(call.get("arguments") or {})
+def _pinned_keys(call: dict[str, Any]) -> set[str]:
+    """The argument names a surfaced call's ``plan.pinned_arguments`` declares as server pins."""
     plan = call.get("plan")
     pinned = plan.get("pinned_arguments") if isinstance(plan, dict) else None
-    for key in pinned or {}:
+    return set(pinned) if isinstance(pinned, dict) else set()
+
+
+def _requested_arguments(call: dict[str, Any], pinned: Collection[str] | None = None) -> dict[str, Any]:
+    """A call's arguments as the model requested them — the server's pins taken back out.
+
+    A surfaced call carries the card's arguments, which include whatever was
+    pinned onto it (a privileged plan's ``pinned_arguments``; the ``profile``
+    the chat pins onto a confirm card with a planner); identity for
+    de-duplication is the model's own call. ``pinned`` overrides the call's
+    own pin list (so both sides of a comparison drop the same keys).
+    """
+    arguments = dict(call.get("arguments") or {})
+    for key in _pinned_keys(call) if pinned is None else pinned:
         arguments.pop(key, None)
     return arguments
 
 
 def _same_call(a: dict[str, Any], b: dict[str, Any]) -> bool:
-    """Same tool, same requested arguments — whatever else (plan, pins, token) one of them carries."""
-    return a.get("name") == b.get("name") and _requested_arguments(a) == _requested_arguments(b)
+    """Same tool, same requested arguments — whatever else (plan, pins, token) one of them carries.
+
+    The pins of *both* sides are taken out of both: a model that re-emits a
+    call with ``profile: null`` after its first was surfaced with the pinned
+    profile is still one card.
+    """
+    if a.get("name") != b.get("name"):
+        return False
+    pinned = _pinned_keys(a) | _pinned_keys(b)
+    return _requested_arguments(a, pinned) == _requested_arguments(b, pinned)
 
 
-async def _surfaced_call(call: dict[str, Any], registry: Any | None) -> dict[str, Any]:
+async def _planned_confirm_call(
+    call: dict[str, Any], registry: Any, profile_name: str | None, home_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """A confirm-class call with a planner, surfaced with its plan and the pinned profile.
+
+    The server pins ``arguments["profile"]`` to the turn's profile name
+    (``profile_name``, else :data:`GENERAL_WIZARD_PROFILE`) *before* planning,
+    overwriting whatever the model wrote — missing, ``null`` or invented —
+    so the cost ceiling a handler like ``generate_image`` enforces is the
+    turn's, never one the model chose. When the turn carried a ``home_dir``
+    (the request's ``NVH_HOME`` override, where the chat resolved the
+    profile), ``arguments["profile_home"]`` is pinned too, so the handler
+    resolves the same profile the chat did instead of the process home's.
+    The pins are declared under ``plan.pinned_arguments`` so
+    :func:`_same_call` still keys on the model's own call. Nothing else: no
+    approval token is minted and no plan-derived pins are folded in — those
+    are privileged-only; the click is ``confirmed=True``, as for every
+    confirm tool.
+    """
+    pin: dict[str, Any] = {"profile": profile_name or GENERAL_WIZARD_PROFILE}
+    if home_dir is not None:
+        pin["profile_home"] = str(home_dir)
+    arguments = {**(call.get("arguments") or {}), **pin}
+    surfaced: dict[str, Any] = {"name": call["name"], "arguments": arguments}
+    try:
+        plan = await registry.plan(call["name"], arguments)
+    except Exception as exc:
+        logger.warning("plan for confirm call '%s' not built: %s", call["name"], exc)
+        plan = {"ok": False, "error": f"dry run failed: {str(exc)[:200]}", "commands": []}
+    planned: dict[str, Any] = dict(plan) if isinstance(plan, dict) else {"ok": True, "commands": []}
+    planned["pinned_arguments"] = pin
+    surfaced["plan"] = planned
+    return surfaced
+
+
+async def _surfaced_call(
+    call: dict[str, Any],
+    registry: Any | None,
+    *,
+    profile_name: str | None = None,
+    unattended: bool = False,
+    home_dir: str | Path | None = None,
+) -> dict[str, Any]:
     """The dict the UI gets for one confirm-bucket call.
 
-    Confirm-class (and unknown) calls pass through as ``{name, arguments}``.
+    Confirm-class calls whose tool has no planner (and unknown tools) pass
+    through as ``{name, arguments}``. A confirm-class call whose tool has a
+    planner is surfaced with the registry's dry run as ``plan`` and the
+    turn's profile (and ``home_dir``) pinned onto its ``arguments``
+    (:func:`_planned_confirm_call`; no token, no plan-derived pins).
+
+    ``unattended`` (the schedule runner, design §6): nothing is planned and
+    nothing is minted. A privileged or confirm-class call is recorded as
+    ``{name, arguments, privileged, unattended: True}`` and
+    ``execute(confirmed=False)`` is never called, so no approval token exists
+    to be written to a job file or served from one. The recorded
+    ``arguments`` go through :func:`_redact_arguments` first: nothing can run
+    the record, so a key the model wrote into ``save_provider_key`` has no
+    business in ``jobs/<id>.jsonl`` or ``GET /v1/jobs/{id}/events``.
+
     A ``privileged`` call is surfaced with what its red card needs —
     ``privileged: True``, the registry's dry-run ``plan``, the card's
     ``arguments`` (the model's plus whatever the plan pinned — the token
@@ -577,9 +721,20 @@ async def _surfaced_call(call: dict[str, Any], registry: Any | None) -> dict[str
     surfaced calls go to the UI only.
     """
     tool = registry.get(call["name"]) if registry is not None else None
-    if tool is None or tool.safety_class != "privileged":
+    if tool is None:
         return call
     arguments = call.get("arguments", {})
+    if unattended and tool.safety_class != "auto":
+        return {
+            "name": call["name"],
+            "arguments": _redact_arguments(arguments),
+            "privileged": tool.safety_class == "privileged",
+            "unattended": True,
+        }
+    if tool.safety_class != "privileged":
+        if tool.safety_class == "confirm" and tool.planner is not None:
+            return await _planned_confirm_call(call, registry, profile_name, home_dir)
+        return call
     surfaced: dict[str, Any] = {"name": call["name"], "arguments": arguments, "privileged": True}
     try:
         card = await registry.execute(call["name"], arguments=arguments, confirmed=False)
@@ -599,7 +754,13 @@ async def _surfaced_call(call: dict[str, Any], registry: Any | None) -> dict[str
 
 
 async def _surface_confirm_calls(
-    pending: list[dict[str, Any]], calls: list[dict[str, Any]], registry: Any | None,
+    pending: list[dict[str, Any]],
+    calls: list[dict[str, Any]],
+    registry: Any | None,
+    *,
+    profile_name: str | None = None,
+    unattended: bool = False,
+    home_dir: str | Path | None = None,
 ) -> None:
     """Append confirm-bucket calls the UI hasn't seen yet, privileged ones with their card.
 
@@ -607,21 +768,50 @@ async def _surface_confirm_calls(
     call surfaced on iteration 1 must still be in ``done.tool_calls`` after
     iteration 2 answered); a model re-emitting the same call after seeing an
     auto-tool result must not produce a duplicate card, so identity is the
-    tool name plus arguments, not the surfaced dict.
+    tool name plus arguments, not the surfaced dict. ``profile_name``,
+    ``unattended`` and ``home_dir`` are the turn's, handed to
+    :func:`_surfaced_call`.
     """
     for call in calls:
         if not any(_same_call(call, seen) for seen in pending):
-            pending.append(await _surfaced_call(call, registry))
+            pending.append(await _surfaced_call(
+                call, registry, profile_name=profile_name, unattended=unattended, home_dir=home_dir,
+            ))
+
+
+def _redact_arguments(value: Any) -> Any:
+    """``value`` with every string run through ``redact_secrets`` (nested dicts and lists included).
+
+    Never mutates its input: a new structure comes back, so a live card's
+    arguments (which an approval token may sign) are left exactly as they
+    were and only the copy that is recorded or persisted is redacted.
+    """
+    from nvh.core.agent_guardrails import redact_secrets
+
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, dict):
+        return {k: _redact_arguments(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_arguments(v) for v in value]
+    return value
 
 
 def _persistable_calls(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Surfaced calls without their approval tokens, for the conversation store.
+    """Surfaced calls without their approval tokens and with redacted arguments, for a store.
 
     A stored token is of no use to a reload (cards are not rehydrated) and a
-    fifteen-minute, single-use secret has no business in a file.
+    fifteen-minute, single-use secret has no business in a file; neither has
+    an API key the model wrote into a call's arguments, so every string
+    argument goes through ``redact_secrets`` (:func:`_redact_arguments`) on
+    the way to the conversation store or a job file. The live list is left
+    untouched.
     """
     return [
-        {k: v for k, v in call.items() if k not in ("approval_token", "approval_expires_at")}
+        {
+            k: (_redact_arguments(v) if k == "arguments" else v)
+            for k, v in call.items() if k not in ("approval_token", "approval_expires_at")
+        }
         if isinstance(call, dict) else call
         for call in calls
     ]
@@ -892,6 +1082,27 @@ def _local_label(provider: str) -> str:
 def _pinned_provider(prof: ProfileOverrides) -> str | None:
     """The provider a profile pins — the default local one for a bare ``local-only`` profile."""
     return prof.provider or (LOCAL_PROVIDER if prof.local_only else None)
+
+
+def _with_provider_pin(prof: ProfileOverrides, provider: str | None, label: str) -> ProfileOverrides:
+    """The turn's own provider pin (a schedule's ``advisor``) laid over the profile's.
+
+    Advisory exactly like a profile's ``provider`` (:func:`_pin_provider`: an
+    unregistered or unreachable provider keeps the router's choice and notes
+    why). The profile's model pin is dropped when the provider changes —
+    model ids are provider-specific. A ``local-only`` profile keeps its own
+    pin: a per-schedule advisor must never move it onto a cloud provider.
+    """
+    name = (provider or "").strip()
+    if not name or name == prof.provider:
+        return prof
+    if prof.local_only:
+        logger.info(
+            "%s: provider pin %r ignored — profile %r is local-only and keeps %r",
+            label, name, prof.profile_name, _pinned_provider(prof),
+        )
+        return prof
+    return replace(prof, provider=name, model=None)
 
 
 # Reachability of the local daemon, per base URL: ``{url: (monotonic, ok)}``.
@@ -1298,6 +1509,20 @@ class _TurnSetup:
     vault_recall: str | None = None
     # True once the prompt was built for native function calling.
     native: bool = False
+    # True for a turn nobody is watching (the schedule runner): the dialogue
+    # tools are out of the whitelist, the roster is SCHEDULE_AUTO_TOOLS and
+    # surfaced calls carry no plan and no token (see ``_surfaced_call``).
+    unattended: bool = False
+    # The profile's whitelist as resolved for this turn, *before* the dialogue
+    # tools were added or the unattended roster intersected: what the profile
+    # itself allows. ``None`` = no whitelist. An unattended turn records a
+    # confirm/privileged request only when this allows the tool
+    # (``_records_unattended``); everything else is a whitelist refusal.
+    raw_tools_allowed: frozenset[str] | None = None
+    # The request's NVH_HOME override (``wizard_chat(home_dir=...)``), where
+    # the profile catalog was read; pinned onto confirm cards with a planner
+    # so the handler resolves the same profile (``_planned_confirm_call``).
+    home_dir: str | Path | None = None
 
     @property
     def profile_reason(self) -> str | None:
@@ -1348,11 +1573,17 @@ async def _prepare_turn(
     profile: str | None,
     label: str,
     engine: Any | None = None,
+    unattended: bool = False,
+    provider: str | None = None,
 ) -> _TurnSetup:
     """Live state → specialist → overrides → filtered catalog → prompt inputs.
 
     ``history`` is handed to the concierge unchanged (entries may carry
     ``used_profile`` for continuity) and stored for message building.
+    ``unattended`` (the schedule runner) narrows the whitelist to the
+    read-only roster and drops the dialogue tools (:func:`_effective_whitelist`).
+    ``provider`` is the turn's own advisory provider pin (a schedule's
+    ``advisor``), laid over the profile's (:func:`_with_provider_pin`).
     ``engine`` (the turn's engine, ``None`` when there is none) lets a
     concierge-chosen ``local-only`` specialist be demoted to the general
     Wizard *before* the prompt inputs are fixed when its local provider is
@@ -1367,6 +1598,10 @@ async def _prepare_turn(
     from nvh.integrations.wizard.concierge import SpecialistChoice, resolve_auto_profile
     from nvh.integrations.wizard.context import wizard_context
     from nvh.integrations.wizard.findings import derive_findings
+
+    # The turn's own pin, kept apart from the ``provider`` the demotion branch
+    # below unpacks from ``_missing_local_provider``.
+    turn_provider = provider
 
     # ``wizard_context`` is blocking by design (httpx.get of Ollama's /api/tags,
     # nvidia-smi / pynvml, disk and provider probes — seconds in the worst
@@ -1439,6 +1674,13 @@ async def _prepare_turn(
             prof = ProfileOverrides()
         else:
             prof = prof.with_core_tools()
+    # The one whitelist the catalog, the call filter and the execution gate
+    # read this turn: dialogue tools in for a human, the read-only roster
+    # only for a timer (O10, design §6). The profile's own whitelist is kept
+    # beside it for what an unattended turn may *record*.
+    raw_tools_allowed = prof.tools_allowed
+    prof = replace(prof, tools_allowed=_effective_whitelist(prof.tools_allowed, unattended=unattended))
+    prof = _with_provider_pin(prof, turn_provider, label)
     tool_schemas = _filter_tool_schemas(tool_schemas, prof.tools_allowed)
     # The same whitelisted catalogue as native function specs, for providers
     # that can take ``tools=`` (decided per completion, see _native_tool_kwargs).
@@ -1468,6 +1710,9 @@ async def _prepare_turn(
         history=list(history or []),
         native_tools=native_tools,
         vault_recall=vault_recall,
+        unattended=unattended,
+        raw_tools_allowed=raw_tools_allowed,
+        home_dir=home_dir,
     )
 
 
@@ -1541,8 +1786,9 @@ class _LoopState:
     # Confirm-class calls for the UI's confirm cards (``tool_calls`` /
     # ``confirm_required``). Accumulate across iterations, never duplicate.
     pending_confirm: list[dict[str, Any]] = field(default_factory=list)
-    # Auto-class calls the loop did not execute, each with a ``reason``. The
-    # UI shows them; it never auto-runs them.
+    # Calls the loop did not execute, each with a ``reason``: auto-class
+    # calls it could not run, a second question, and any confirm/privileged
+    # call made beside a question. The UI shows them; it never runs them.
     deferred_auto: list[dict[str, Any]] = field(default_factory=list)
     # True while the latest iteration actually executed an auto tool —
     # refusals and confirm-class deferrals never count.
@@ -1570,15 +1816,106 @@ async def _defer_calls_to_ui(
     ``reason`` so the UI can explain why they did not run.
     """
     prof = turn.prof
-    allowed, refused = _split_by_whitelist(tool_calls, prof.tools_allowed, prof.profile_name)
+    recorded = [call for call in tool_calls if _records_unattended(call, turn)]
+    gated = [call for call in tool_calls if not _records_unattended(call, turn)]
+    allowed, refused = _split_by_whitelist(gated, prof.tools_allowed, prof.profile_name)
     state.tool_results.extend(refused)
     confirm_calls, auto_calls = _split_by_safety_class(allowed, turn.registry)
-    await _surface_confirm_calls(state.pending_confirm, confirm_calls, turn.registry)
+    confirm_calls = _hold_for_question(_one_question_only(recorded + confirm_calls, state), state)
+    await _surface_confirm_calls(
+        state.pending_confirm, confirm_calls, turn.registry,
+        profile_name=prof.profile_name, unattended=turn.unattended, home_dir=turn.home_dir,
+    )
     for call in auto_calls:
         entry = {"name": call["name"], "arguments": call.get("arguments", {}), "reason": reason}
         if entry not in state.deferred_auto:
             state.deferred_auto.append(entry)
     return refused
+
+
+def _safety_class_of(registry: Any | None, name: str) -> str:
+    """The registry's class for ``name``; ``"unknown"`` when it is not registered (or there is no registry)."""
+    tool = registry.get(name) if registry is not None else None
+    klass = getattr(tool, "safety_class", None) if tool is not None else None
+    return klass if isinstance(klass, str) and klass else "unknown"
+
+
+def _records_unattended(call: dict[str, Any], turn: _TurnSetup) -> bool:
+    """True when an unattended turn *records* this call instead of running or refusing it.
+
+    A confirm or privileged request on a timer is recorded on the run as
+    ``{name, arguments, privileged, unattended: True}`` (design §6: "recorded
+    as deferred, without a plan or a token, never executed") — but only for
+    a tool the profile itself allows (``turn.raw_tools_allowed``: ``None`` is
+    every tool). A request outside the profile's whitelist goes through the
+    whitelist gate like any other call and is refused with
+    ``not_allowed: true``: a strict-tools or user-pinned profile keeps its
+    whitelist on a timer exactly as it does with a human present, and a run
+    is never marked ``deferred`` for a tool nothing may ever run. Auto and
+    unknown calls go through the gate as usual, and a dialogue tool is
+    refused by it (``ask_user`` is out of every unattended whitelist), never
+    recorded as a question nobody will answer.
+    """
+    if not turn.unattended or call["name"] in DIALOGUE_TOOLS:
+        return False
+    if turn.raw_tools_allowed is not None and call["name"] not in turn.raw_tools_allowed:
+        return False
+    return _safety_class_of(turn.registry, call["name"]) in ("confirm", "privileged")
+
+
+def _hold_for_question(calls: list[dict[str, Any]], state: _LoopState) -> list[dict[str, Any]]:
+    """``calls`` without the confirm/privileged siblings of a pending question.
+
+    When a dialogue call is among ``calls`` (or a question is already pending
+    from an earlier bucket), every other call in the bucket is an action the
+    model made in the same breath as a question it has not had answered —
+    "which disk?" beside an apply for one of them. Such a call is never
+    surfaced as a card (no plan, no approval token to leave on screen
+    contradicting the answer); it lands in ``deferred_tool_calls`` with
+    :data:`DEFER_QUESTION_PENDING` and the model may re-request it on the
+    next turn, with the answer in hand. Design §1: one question, then stop —
+    never ask and act in the same turn.
+    """
+    asked_here = any(call["name"] in DIALOGUE_TOOLS for call in calls)
+    asked_before = any(seen.get("name") in DIALOGUE_TOOLS for seen in state.pending_confirm)
+    if not (asked_here or asked_before):
+        return calls
+    kept: list[dict[str, Any]] = []
+    for call in calls:
+        if call["name"] in DIALOGUE_TOOLS:
+            kept.append(call)
+            continue
+        entry = {"name": call["name"], "arguments": call.get("arguments", {}), "reason": DEFER_QUESTION_PENDING}
+        if entry not in state.deferred_auto:
+            state.deferred_auto.append(entry)
+    return kept
+
+
+def _one_question_only(calls: list[dict[str, Any]], state: _LoopState) -> list[dict[str, Any]]:
+    """``calls`` with at most one dialogue call across the whole turn.
+
+    The first ``ask_user`` of the turn is kept for the confirm bucket (one
+    question card); every later one — in the same iteration, or once a
+    question is already pending from an earlier bucket — goes to
+    ``deferred_tool_calls`` with :data:`DEFER_QUESTION_PENDING`. Two
+    differently worded questions would otherwise both become cards (the
+    bucket de-duplicates by arguments). The loop callers stop iterating
+    when a question is pending, so the model never asks and acts in one turn.
+    """
+    asked = any(seen.get("name") in DIALOGUE_TOOLS for seen in state.pending_confirm)
+    kept: list[dict[str, Any]] = []
+    for call in calls:
+        if call["name"] in DIALOGUE_TOOLS:
+            if asked:
+                entry = {
+                    "name": call["name"], "arguments": call.get("arguments", {}), "reason": DEFER_QUESTION_PENDING,
+                }
+                if entry not in state.deferred_auto:
+                    state.deferred_auto.append(entry)
+                continue
+            asked = True
+        kept.append(call)
+    return kept
 
 
 async def _execute_tool_calls(
@@ -1594,7 +1931,14 @@ async def _execute_tool_calls(
     model as system messages; confirm-class calls are deferred to the UI;
     whitelist refusals are recorded (and shown) but never executed and never
     counted as an executed tool — a turn that only produced refusals stops
-    iterating instead of paying for another completion.
+    iterating instead of paying for another completion. A deferred
+    ``ask_user`` ends the turn too (``ran_any_auto`` is cleared even when an
+    auto sibling ran), only the first question of the turn becomes a card
+    (:func:`_one_question_only`), and a confirm or privileged sibling of the
+    question is held in ``deferred_tool_calls`` instead of becoming a card
+    (:func:`_hold_for_question`). Every ``tool_call`` event carries the
+    tool's ``safety_class`` (``"unknown"`` when unregistered) so the UI can
+    tell work from a question before the card arrives.
     """
     from nvh.providers.base import Message
 
@@ -1602,7 +1946,17 @@ async def _execute_tool_calls(
     state.ran_any_auto = False
     deferred: list[dict[str, Any]] = []
     for call in tool_calls:
-        yield {"type": "tool_call", "name": call["name"], "arguments": call.get("arguments", {})}
+        yield {
+            "type": "tool_call",
+            "name": call["name"],
+            "arguments": call.get("arguments", {}),
+            "safety_class": _safety_class_of(turn.registry, call["name"]),
+        }
+        if _records_unattended(call, turn):
+            # A timer's confirm/privileged request is recorded, never run and
+            # never planned (``_surfaced_call`` mints nothing unattended).
+            deferred.append(call)
+            continue
         result = await _run_auto_tool(
             call["name"], call.get("arguments", {}),
             tools_allowed=prof.tools_allowed, profile_name=prof.profile_name,
@@ -1629,10 +1983,22 @@ async def _execute_tool_calls(
             # trusting an answer from before the tool ran.
             _reset_local_probe_cache()
 
+    # One question, then stop (design §1): the first ``ask_user`` is the
+    # turn's question card, later ones are recorded as pending, and the turn
+    # does not take another iteration to act on an assumption before the
+    # answer arrives — whatever auto sibling ran.
+    deferred = _one_question_only(deferred, state)
+    if any(call["name"] in DIALOGUE_TOOLS for call in deferred):
+        state.ran_any_auto = False
+    deferred = _hold_for_question(deferred, state)
+
     # Confirm-class calls accumulate across iterations and go out with the
     # single confirm_required event / ``tool_calls``, so nothing is lost when
     # a later iteration answers without re-emitting them.
-    await _surface_confirm_calls(state.pending_confirm, deferred, turn.registry)
+    await _surface_confirm_calls(
+        state.pending_confirm, deferred, turn.registry,
+        profile_name=prof.profile_name, unattended=turn.unattended, home_dir=turn.home_dir,
+    )
 
 
 def _clamp_max_iterations(value: int | None) -> int:
@@ -1716,6 +2082,8 @@ async def wizard_chat(
     conversation_id: str | None = None,
     profile: str | None = None,
     max_iterations: int | None = None,
+    unattended: bool = False,
+    provider: str | None = None,
 ) -> dict[str, Any]:
     """Answer a Wizard question with the live-state-grounded LLM path.
 
@@ -1737,6 +2105,19 @@ async def wizard_chat(
             general Wizard for the turn; the same profile *pinned* refuses
             deterministically instead.
         max_iterations: Clamp on LLM round-trips; 1 = "just answer, no tools".
+        unattended: True for a turn nobody is watching (the schedule runner,
+            design §6): the dialogue tools are not offered, the whitelist is
+            the profile's ``tools_allowed`` ∩ :data:`SCHEDULE_AUTO_TOOLS`
+            (the roster itself when the profile has none), and a confirm or
+            privileged call the model requests is recorded in ``tool_calls``
+            as ``{name, arguments, privileged, unattended: True}`` — no plan,
+            no approval token, nothing executed — when the profile's own
+            whitelist allows that tool; otherwise it is refused like any other.
+        provider: An advisory provider pin for this turn (a schedule's
+            ``advisor``), applied like a profile's own ``provider`` pin: it
+            replaces the router's provider when that provider is registered
+            (and, for the local one, running), is noted and ignored
+            otherwise, and never moves a ``local-only`` profile off its own.
 
     Returns:
         ``{answer, mode, used_provider?, used_model?, context, tool_calls,
@@ -1756,6 +2137,7 @@ async def wizard_chat(
     turn = await _prepare_turn(
         question, history=history, home_dir=home_dir,
         enable_followup=enable_followup, profile=profile, label="wizard_chat", engine=engine,
+        unattended=unattended, provider=provider,
     )
     prof = turn.prof
     fallback_reason: str | None = None
@@ -2140,21 +2522,30 @@ async def wizard_chat_stream(
     conversation_id: str | None = None,
     profile: str | None = None,
     max_iterations: int | None = None,
+    unattended: bool = False,
+    provider: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream a Wizard turn as a sequence of events.
+
+    ``unattended`` and ``provider`` have the same meaning as on :func:`wizard_chat`.
 
     Event types yielded:
 
       - ``{"type": "iteration", "n": int}``
       - ``{"type": "token", "text": str}``                — user-visible delta
-      - ``{"type": "tool_call", "name": str, "arguments": dict}``
+      - ``{"type": "tool_call", "name": str, "arguments": dict,
+            "safety_class": str}`` — the registry's class for the tool
+        (``"unknown"`` when unregistered), so a question (``confirm``) never
+        shows as work
       - ``{"type": "tool_result", "name": str, "result": dict}`` — executed
         auto tools *and* whitelist refusals (``result.not_allowed=True``), so
         the trace shows what the profile declined
       - ``{"type": "confirm_required", "tool_calls": [...]}``  — for UI cards;
         confirm-class calls only, emitted at most once per turn, right before
         ``done`` (or before ``error`` if a later iteration failed), and covers
-        every deferred confirm-class call from any iteration
+        every deferred confirm-class call from any iteration; at most one
+        ``ask_user`` per turn (later ones land in ``deferred_tool_calls`` with
+        ``reason: "question_pending"``)
       - ``{"type": "done", "answer": str, "used_provider": str,
             "used_model": str, "tool_calls": [...], "tool_results": [...],
             "deferred_tool_calls": [{name, arguments, reason}, ...],
@@ -2162,8 +2553,9 @@ async def wizard_chat_stream(
             "latency_ms": int,
             "cost_ceiling_hit": bool, "cost_ceiling_usd": float | None,
             "used_profile": str | None, "profile_reason": str | None}`` —
-        ``deferred_tool_calls`` are auto-class calls the loop did not run
-        (``max_iterations=1``, cost ceiling); the UI must not auto-run them.
+        ``deferred_tool_calls`` are calls the loop did not run
+        (``max_iterations=1``, cost ceiling, a question pending); the UI must
+        not auto-run them.
         Right before ``done`` the turn is written to the cost ledger as one
         ``QueryLog`` row (``mode="wizard-chat"``, the metered totals summed
         over its iterations), as the blocking path does per completion; a
@@ -2185,6 +2577,7 @@ async def wizard_chat_stream(
     turn = await _prepare_turn(
         question, history=history, home_dir=home_dir,
         enable_followup=enable_followup, profile=profile, label="wizard_chat_stream", engine=engine,
+        unattended=unattended, provider=provider,
     )
     prof = turn.prof
     state = _LoopState()

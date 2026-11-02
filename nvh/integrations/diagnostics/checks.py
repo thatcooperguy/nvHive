@@ -1174,9 +1174,45 @@ def _tools(ctx: CheckContext) -> CheckResult:
 
 @check("scheduler", "Scheduler", REPORT)
 def _scheduler(ctx: CheckContext) -> CheckResult:
-    from nvh.core.scheduler import Scheduler
+    """Schedule count, which process runs them, and whether a corrupt store was quarantined.
 
-    return CheckResult(status="info", detail=f"{len(Scheduler().list_tasks())} task(s)")
+    ``runner`` is ``api`` or ``cli`` while a live heartbeat holds
+    ``state/scheduler.lock`` (the holder writes its kind), else ``none``;
+    ``unknown (lock unreadable)`` when the lock exists but this account
+    cannot read it (it still counts as held: nothing takes it over).
+    Constructing ``Scheduler`` moves an unparseable ``schedules.json`` aside
+    as ``schedules.json.corrupt-<timestamp>``; when such a sibling exists the
+    row warns and names the newest one, since the store it reads is empty.
+    """
+    from nvh.core.scheduler import Scheduler
+    from nvh.integrations.services.schedule_runner import runner_status
+
+    scheduler = Scheduler()
+    count = len(scheduler.list_tasks())
+    runner = runner_status()
+    if runner.get("unreadable"):
+        runner_label = "unknown (lock unreadable)"
+    else:
+        runner_label = (runner.get("runner") or "api") if runner.get("active") else "none"
+    detail = f"{count} task(s) \u00b7 runner: {runner_label}"
+    data: dict[str, Any] = {
+        "tasks": count,
+        "runner": runner_label,
+        "runner_pid": runner.get("pid"),
+        "lock_path": runner.get("lock_path"),
+    }
+    store = scheduler.schedule_file
+    corrupt = sorted(store.parent.glob(f"{store.name}.corrupt-*"))
+    if corrupt:
+        newest = corrupt[-1]
+        data["quarantined"] = [p.name for p in corrupt]
+        return CheckResult(
+            status="warn",
+            detail=f"{detail} \u00b7 {newest.name} quarantined (could not be parsed; the store started empty)",
+            fix=f"Inspect {newest} and restore the records you want with `nvh schedule add`, then delete the .corrupt-* file(s).",
+            data=data,
+        )
+    return CheckResult(status="info", detail=detail, data=data)
 
 
 @check("network", "Network", REPORT)

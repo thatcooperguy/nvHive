@@ -25,22 +25,20 @@ from nvh.integrations.wizard.profiles import (
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / "nvh" / "catalog" / "agent-library.json"
 
-VALID_TOOLS = {
-    "diagnose", "refresh_models", "repair_workspace", "validate_provider_key",
-    "save_provider_key", "rag_ask", "rag_ask_vault", "rag_ingest",
-    "web_search",
-    "home_assistant_status", "home_assistant_entities", "home_assistant_state",
-    "home_assistant_services", "home_assistant_call",
-    # The privileged tier (proposal §3.4). ``system_settings_get`` / ``_plan``
-    # are auto (read-only facts and a dry run); ``_apply``, ``apt_install``,
-    # ``snap_install`` and ``service_enable`` render a red approval card.
-    "system_settings_get", "system_settings_plan", "system_settings_apply",
-    "apt_install", "snap_install", "service_enable",
-    # The Spark playbooks (proposal §3.5). ``playbook_list`` / ``playbook_plan``
-    # are auto (the catalogue and a compiled plan); ``playbook_install`` is
-    # privileged and renders the red card.
-    "playbook_list", "playbook_plan", "playbook_install",
-}
+
+
+def _valid_tools() -> frozenset[str]:
+    """The Wizard registry's roster — the one source of valid whitelist names (0.46, Principle 3).
+
+    Derived at call time, not import time, so tool discovery runs under the
+    test's hermetic home rather than the developer's. A row may whitelist any
+    registered tool, and a new tool needs no edit here.
+    """
+    from nvh.integrations.wizard.tools import default_registry
+
+    return frozenset(t.name for t in default_registry().list_tools())
+
+
 # 100 original profiles (2026-08-05) + the two Smart Home profiles + the
 # Setup Concierge + the Model Sommelier (all 2026-09-02) + Device Settings
 # + the App Installer (both 2026-09-03).
@@ -353,6 +351,7 @@ def test_catalog_names_are_unique_kebab_and_collision_free() -> None:
 
 
 def test_catalog_entries_are_well_formed() -> None:
+    valid = _valid_tools()
     for p in _catalog()["profiles"]:
         assert p["title"].strip(), p["name"]
         assert p["category"].strip(), p["name"]
@@ -363,8 +362,33 @@ def test_catalog_entries_are_well_formed() -> None:
         tools = p.get("tools_allowed")
         if tools is not None:
             assert tools, f"empty whitelist (use null for all): {p['name']}"
-            assert set(tools) <= VALID_TOOLS, f"unknown tool in {p['name']}"
+            assert set(tools) <= valid, f"unknown tool in {p['name']}"
         assert 1 <= len(p.get("tags", [])) <= 4, p["name"]
+        if "starter" in p:
+            assert isinstance(p["starter"], str) and p["starter"].strip(), p["name"]
+
+
+def test_roster_is_the_registry_and_the_0_46_rows_whitelist_only_where_the_persona_writes() -> None:
+    """``remember`` goes to the coach alone (a write tool only where the persona files); the drafting
+    personas keep handing notes back; the prompt crafter sees ``generate_image`` with the general roster."""
+    valid = _valid_tools()
+    assert {"ask_user", "remember", "generate_image", "rag_ask_vault", "playbook_install"} <= valid
+    rows = {p["name"]: p for p in _catalog()["profiles"]}
+    assert rows["daily-notes-coach"]["tools_allowed"] == ["rag_ask_vault", "remember"]
+    for name in ("vault-gardener", "zettelkasten-clerk"):
+        assert "remember" not in rows[name]["tools_allowed"], name
+    assert rows["diffusion-prompt-crafter"]["tools_allowed"] is None
+    assert [p["name"] for p in _catalog()["profiles"] if "remember" in (p["tools_allowed"] or [])] == ["daily-notes-coach"]
+
+
+def test_starter_flows_from_the_row_to_the_profile_and_the_core_built_ins_carry_one() -> None:
+    lib = {p.name: p for p in _load_library_profiles()}
+    for p in _catalog()["profiles"]:
+        assert lib[p["name"]].starter == p.get("starter", ""), p["name"]
+    # The six core built-ins carry the on-persona starters the WebUI's empty state shows.
+    assert all(p.starter.strip() for p in BUILT_IN_PROFILES)
+    assert len({p.starter for p in BUILT_IN_PROFILES}) == len(BUILT_IN_PROFILES)
+    assert BUILT_IN_PROFILES[0].to_dict()["starter"] == BUILT_IN_PROFILES[0].starter
 
 
 def test_library_loader_returns_all_profiles_marked_built_in() -> None:

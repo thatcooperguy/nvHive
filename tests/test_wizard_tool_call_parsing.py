@@ -270,3 +270,29 @@ def test_build_system_prompt_native_flag_selects_the_variant() -> None:
     assert text_prompt.split("--- Available actions")[0] == native_prompt.split("--- Available actions")[0]
     # No tools: no block on either channel.
     assert build_system_prompt({}, native=True) == build_system_prompt({})
+
+
+def test_dialogue_and_memory_rules_render_once_per_variant() -> None:
+    """The ``ask_user`` and ``remember`` rules (0.46) are one bullet each in the shared Rules list,
+    between the confirm and privileged bullets, so both channels teach them in the same words; the
+    decision guide prefers asking over guessing."""
+    from nvh.integrations.wizard.personality import _TOOL_DECISION_GUIDE, _tool_rules
+
+    for native in (False, True):
+        rules = _tool_rules(native=native)
+        assert sum(line.startswith("  - `ask_user`:") for line in rules) == 1
+        assert sum(line.startswith("  - `remember`:") for line in rules) == 1
+        joined = "\n".join(rules)
+        assert "Never ask and act in the same turn." in joined
+        assert "as a TOOL_RESULT ask_user line (the same answer;" in joined
+        assert "never include keys, passwords, approval tokens or" in joined
+        index = {
+            key: next(i for i, line in enumerate(rules) if key in line)
+            for key in ("`confirm` tools", "`ask_user`:", "`remember`:", "`privileged` tools")
+        }
+        assert index["`confirm` tools"] < index["`ask_user`:"] < index["`remember`:"] < index["`privileged` tools"]
+    text, native = _format_tools_block(_catalog()), _format_tools_block(_catalog(), native=True)
+    assert "Never ask and act in the same turn." in text and "Never ask and act in the same turn." in native
+    assert "7. Prefer `ask_user` over guessing when a choice changes disk, model" in _TOOL_DECISION_GUIDE
+    assert _TOOL_DECISION_GUIDE.count("Prefer `ask_user`") == 1
+    assert "Prefer `ask_user` over guessing" in build_system_prompt({}, tools=_catalog())

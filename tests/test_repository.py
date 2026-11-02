@@ -297,3 +297,79 @@ async def test_get_analytics_nonzero(db):
     assert analytics["queries_today"] >= 2
     assert analytics["queries_this_month"] >= 2
     assert "alpha" in analytics["queries_by_provider"]
+
+
+# ---------------------------------------------------------------------------
+# Session spend (0.46 §7): get_spend_since / distinct_models_since
+# ---------------------------------------------------------------------------
+
+
+async def _backdate(query_id: str, *, hours: float) -> None:
+    """Move one ``QueryLog`` row's ``created_at`` into the past."""
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import update
+
+    from nvh.storage.models import QueryLog
+
+    async with repo.get_session() as session:
+        await session.execute(
+            update(QueryLog)
+            .where(QueryLog.id == query_id)
+            .values(created_at=datetime.now(UTC) - timedelta(hours=hours))
+        )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_get_spend_since_sums_successful_rows_after_the_cut(db):
+    from datetime import UTC, datetime, timedelta
+
+    old = await repo.log_query(mode="simple", provider="openai", model="gpt-old", cost_usd=Decimal("0.50"))
+    await _backdate(old.id, hours=3)
+    await repo.log_query(mode="proxy", provider="openai", model="gpt-new", cost_usd=Decimal("0.10"))
+    await repo.log_query(mode="wizard-chat", provider="openai", model="gpt-new", cost_usd=Decimal("0.05"))
+    await repo.log_query(mode="simple", provider="groq", model="llama", cost_usd=Decimal("0.07"), status="error")
+
+    since = datetime.now(UTC) - timedelta(hours=1)
+    assert await repo.get_spend_since(since) == Decimal("0.15"), "the back-dated row and the failed row do not count"
+    assert await repo.get_spend_since(datetime.now(UTC) - timedelta(days=1)) == Decimal("0.65")
+    assert await repo.get_spend_since(datetime.now(UTC) + timedelta(minutes=1)) == Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_get_spend_since_reads_any_timezone_as_the_same_instant(db):
+    from datetime import UTC, datetime, timedelta, timezone
+
+    await repo.log_query(mode="simple", provider="openai", model="m", cost_usd=Decimal("0.10"))
+    since = datetime.now(UTC) - timedelta(hours=1)
+
+    east = since.astimezone(timezone(timedelta(hours=5)))
+    west = since.astimezone(timezone(timedelta(hours=-8)))
+    assert await repo.get_spend_since(east) == Decimal("0.10")
+    assert await repo.get_spend_since(west) == Decimal("0.10")
+    # A naive value is read as UTC, the zone the ledger is written in.
+    assert await repo.get_spend_since(since.replace(tzinfo=None)) == Decimal("0.10")
+    # And an instant an hour ahead in another zone is still "after" the row.
+    ahead = (datetime.now(UTC) + timedelta(minutes=5)).astimezone(timezone(timedelta(hours=-8)))
+    assert await repo.get_spend_since(ahead) == Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_distinct_models_since_lists_each_pair_once_whatever_the_status(db):
+    from datetime import UTC, datetime, timedelta
+
+    old = await repo.log_query(mode="simple", provider="anthropic", model="claude-old")
+    await _backdate(old.id, hours=3)
+    await repo.log_query(mode="proxy", provider="openai", model="gpt-new", cost_usd=Decimal("0.10"))
+    await repo.log_query(mode="proxy", provider="openai", model="gpt-new", cost_usd=Decimal("0.10"))
+    await repo.log_query(mode="simple", provider="ollama", model="gemma3:4b", cost_usd=Decimal("0"))
+    await repo.log_query(mode="simple", provider="groq", model="llama", status="error")
+
+    since = datetime.now(UTC) - timedelta(hours=1)
+    pairs = await repo.distinct_models_since(since)
+
+    assert pairs == [("llama", "groq"), ("gemma3:4b", "ollama"), ("gpt-new", "openai")]
+    assert all(isinstance(model, str) and isinstance(provider, str) for model, provider in pairs)
+    assert ("claude-old", "anthropic") in await repo.distinct_models_since(datetime.now(UTC) - timedelta(days=1))
+    assert await repo.distinct_models_since(datetime.now(UTC) + timedelta(minutes=1)) == []

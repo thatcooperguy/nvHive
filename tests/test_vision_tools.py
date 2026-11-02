@@ -132,3 +132,46 @@ class TestDesktopControl:
             tool = registry.get("scroll")
             result = await tool.handler(direction="down", amount="3")
             assert "scroll" in result.lower() or "pyautogui" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# The Wizard's vision bridge allow-lists the generated-image folder
+# ---------------------------------------------------------------------------
+
+
+class TestWizardVisionBridgeRoots:
+    """``allowed_image_roots()`` (nvh/integrations/wizard/vision_bridge.py) includes ``outputs/images``.
+
+    The Wizard's ``generate_image`` tool and the profile-portrait generator save
+    under ``$NVH_HOME/outputs/images/<scope>/`` (nvh/integrations/imagegen.py);
+    ``analyze_image`` must be able to look at what was just rendered. The
+    upload root keeps first place, and a generated image is not a chat
+    attachment, so the cloud rule keeps it local-only.
+    """
+
+    def test_outputs_images_root_is_allowlisted_and_admitted(self, monkeypatch, tmp_path):
+        home = tmp_path / "h"
+        monkeypatch.setenv("NVH_HOME", str(home))
+        monkeypatch.delenv("NVH_OUTPUTS", raising=False)
+        from nvh.integrations.imagegen import outputs_images_root
+        from nvh.integrations.wizard import vision_bridge as vb
+
+        roots = vb.allowed_image_roots()
+        assert roots[0] == vb.uploads_root().resolve()
+        assert outputs_images_root() == home.resolve() / "outputs" / "images"
+        assert outputs_images_root().resolve() in roots
+
+        target = outputs_images_root() / "wizard" / "20260101000000-abcdef01.png"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 24)
+        resolved, refusal = vb.admit_image_path(str(target))
+        assert refusal is None
+        assert resolved == target.resolve()
+        assert vb.cloud_allowed(resolved) is False
+
+    def test_outputs_root_follows_nvh_outputs(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("NVH_HOME", str(tmp_path / "h"))
+        monkeypatch.setenv("NVH_OUTPUTS", str(tmp_path / "elsewhere"))
+        from nvh.integrations.wizard import vision_bridge as vb
+
+        assert (tmp_path / "elsewhere" / "images").resolve() in vb.allowed_image_roots()

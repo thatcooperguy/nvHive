@@ -11289,13 +11289,104 @@ def rag_import_legacy(
 schedule_app = typer.Typer(help="Schedule recurring AI tasks")
 app.add_typer(schedule_app, name="schedule", rich_help_panel="Subcommands")
 
+_SCHEDULE_DO_WARNING = (
+    "mode 'do' runs tools unattended with safe tools auto-approved; only `nvh schedule start`"
+    " in a terminal runs it — the API server's poll leaves it due, and Run now on it records an error."
+)
+_SCHEDULE_API_RUNNING = "the API server is running schedules; use `nvh schedule list`"
+
+
+def _schedule_interval_label(secs: int) -> str:
+    if secs < 60:
+        return f"{secs}s"
+    if secs < 3600:
+        return f"{secs // 60}m"
+    if secs < 86400:
+        return f"{secs // 3600}h"
+    return f"{secs // 86400}d"
+
+
+def _schedule_cost_label(task) -> str:
+    """The three-state last-cost pill: nothing for a never-run schedule, a figure, or 'unknown'."""
+    if task.last_cost_usd is None:
+        return "" if task.last_status in ("", "skipped") else "—"
+    if task.last_cost_known is False:
+        return f"${task.last_cost_usd:.4f}?" if task.last_cost_usd else "unknown"
+    return f"${task.last_cost_usd:.4f}"
+
+
+def _schedule_or_exit(task_id: str):
+    from nvh.core.scheduler import Scheduler
+
+    scheduler = Scheduler()
+    task = scheduler.get(task_id)
+    if task is None:
+        console.print(f"[red]Task not found:[/red] {task_id}")
+        console.print("[dim]Run 'nvh schedule list' to see task IDs.[/dim]")
+        raise typer.Exit(1)
+    return scheduler, task
+
+
+def _print_schedule_run(task, job: dict) -> None:
+    """One line per finished run, from the job record the runner wrote."""
+    outcome = ""
+    events = job.get("recent_events") or []
+    if events:
+        outcome = str(events[-1].get("payload", {}).get("outcome") or "")
+    message = str(job.get("message") or "")
+    if job.get("status") == "complete" and outcome == "skipped":
+        console.print(f"  [yellow]Skipped:[/yellow] {message}\n")
+    elif job.get("status") == "complete":
+        label = "Done:" if outcome != "deferred" else "Done (a request awaits your approval):"
+        console.print(f"  [green]{label}[/green] {message[:120]}\n")
+    else:
+        console.print(f"  [red]Error:[/red] {message[:300]}\n")
+
+
+async def _schedule_runner_once(
+    *, once_due: bool = True, task_id: str | None = None, only_modes: set[str] | None = None,
+) -> None:
+    """Run the due schedules (or one schedule) through the shared runner with a CLI-built engine.
+
+    ``only_modes`` narrows the pass (``{"do"}`` beside a live API runner, which
+    runs the other modes itself and never ``do``).
+    """
+    from nvh.integrations.services import schedule_runner as runner
+
+    engine = await runner.default_engine()
+
+    async def _engine():
+        return engine
+
+    with runner.cli_engine_scope(engine):
+        if task_id is not None:
+            _scheduler, task = _schedule_or_exit(task_id)
+            console.print(f"  Running: [bold]{task.id}[/bold] — {task.prompt[:60]}")
+            try:
+                job_id = await runner.run_schedule_once(task, engine_factory=_engine, allow_do=True, notify=True)
+            except runner.ScheduleRunInFlightError as exc:
+                console.print(f"[yellow]A run of this schedule is already in flight (job {exc.job_id}).[/yellow]")
+                raise typer.Exit(1)
+            job = await runner.wait_for_run(job_id)
+            _print_schedule_run(task, job)
+            return
+        finished = await runner.run_due_tasks(
+            engine_factory=_engine, allow_do=True, notify=True, only_modes=only_modes,
+            on_start=lambda task, job_id: console.print(f"  Running: [bold]{task.id}[/bold] — {task.prompt[:60]}"),
+            on_done=_print_schedule_run,
+        )
+        if not finished:
+            console.print("[dim]No due tasks.[/dim]" if only_modes is None else "[dim]No due `do` tasks.[/dim]")
+
 
 @schedule_app.command("add")
 def schedule_add(
     prompt: str = typer.Argument(..., help="Prompt/task to run on schedule"),
     every: str = typer.Option(..., "--every", "-e", help="Interval: 30s, 5m, 1h, 1d"),
     advisor: str = typer.Option("", "-a", "--advisor", help="Advisor to use (default: auto)"),
-    mode: str = typer.Option("ask", "--mode", help="Mode: ask, convene, do"),
+    mode: str = typer.Option("ask", "--mode", help="Mode: ask, convene, do (do runs only under `nvh schedule start`)"),
+    name: str = typer.Option("", "--name", "-n", help="Display label shown beside the prompt"),
+    profile: str = typer.Option("", "--profile", help="Agent profile for each run (its cost ceiling and tool whitelist apply)"),
 ):
     """Add a recurring scheduled task.
 
@@ -11306,6 +11397,8 @@ def schedule_add(
       nvh schedule add "Check my server CPU" --every 30m --advisor groq
 
       nvh schedule add "Daily standup summary" --every 1d --mode convene
+
+      nvh schedule add "Summarise my vault" --every 1d --name "Vault digest" --profile vault-rag
     """
     from nvh.core.scheduler import Scheduler, parse_interval
 
@@ -11314,6 +11407,16 @@ def schedule_add(
     except ValueError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
+    mode = (mode or "ask").strip().lower()
+    if mode not in ("ask", "convene", "do"):
+        console.print(f"[red]Unknown mode {mode!r}; expected ask, convene or do.[/red]")
+        raise typer.Exit(1)
+    if profile:
+        from nvh.integrations.wizard.profiles import get_profile
+
+        if get_profile(profile) is None:
+            console.print(f"[red]Unknown profile:[/red] {profile}  [dim](nvh agent list shows the names)[/dim]")
+            raise typer.Exit(1)
 
     scheduler = Scheduler()
     task = scheduler.add(
@@ -11321,16 +11424,27 @@ def schedule_add(
         interval_seconds=interval_seconds,
         advisor=advisor,
         mode=mode,
+        name=" ".join(name.split()),
+        profile=profile,
     )
 
     interval_label = every
     console.print(f"[green]Scheduled task added:[/green] [bold]{task.id}[/bold]")
+    if task.name:
+        console.print(f"  Name:     {task.name}")
     console.print(f"  Prompt:   {task.prompt}")
     console.print(f"  Interval: every {interval_label}")
     if task.advisor:
         console.print(f"  Advisor:  {task.advisor}")
+    if task.profile:
+        console.print(f"  Profile:  {task.profile}")
     console.print(f"  Mode:     {task.mode}")
-    console.print("\n[dim]Run 'nvh schedule start' to launch the scheduler daemon.[/dim]")
+    if task.mode == "do":
+        console.print(f"[yellow]Warning:[/yellow] {_SCHEDULE_DO_WARNING}")
+    console.print(
+        "\n[dim]The API server runs due schedules while it is up; without it,"
+        " run 'nvh schedule start' to launch the scheduler daemon.[/dim]"
+    )
 
 
 @schedule_app.command("list")
@@ -11339,6 +11453,7 @@ def schedule_list():
     import time as _time
 
     from nvh.core.scheduler import Scheduler
+    from nvh.integrations.services.schedule_runner import runner_status
 
     scheduler = Scheduler()
     tasks = scheduler.list_tasks()
@@ -11349,47 +11464,50 @@ def schedule_list():
         return
 
     table = Table(title="Scheduled Tasks")
-    table.add_column("ID", style="bold cyan")
+    # 32-hex ids since 0.46: never ellipsised, so the id can be pasted into run/remove.
+    table.add_column("ID", style="bold cyan", min_width=32, no_wrap=True)
+    table.add_column("Name")
     table.add_column("Prompt")
     table.add_column("Every", justify="right")
-    table.add_column("Advisor", style="dim")
     table.add_column("Mode", style="dim")
-    table.add_column("Last Run", style="dim")
     table.add_column("Status")
+    table.add_column("Last", style="dim")
+    table.add_column("Last cost", justify="right")
 
     now = _time.time()
     for task in tasks:
-        # Format interval
-        secs = task.interval_seconds
-        if secs < 60:
-            interval_str = f"{secs}s"
-        elif secs < 3600:
-            interval_str = f"{secs // 60}m"
-        elif secs < 86400:
-            interval_str = f"{secs // 3600}h"
-        else:
-            interval_str = f"{secs // 86400}d"
-
-        last_run = task.last_run[:10] if task.last_run else "never"
         status = "[green]enabled[/green]" if task.enabled else "[dim]disabled[/dim]"
         if task.enabled and task.next_run <= now:
             status = "[yellow]due[/yellow]"
-
+        last = task.last_run[:16].replace("T", " ") if task.last_run else "never"
+        if task.last_status:
+            colour = {"ok": "green", "error": "red", "skipped": "yellow", "deferred": "yellow"}.get(task.last_status, "dim")
+            last = f"{last} [{colour}]{task.last_status}[/{colour}]"
         table.add_row(
             task.id,
+            task.name or "[dim]—[/dim]",
             task.prompt[:60] + ("..." if len(task.prompt) > 60 else ""),
-            interval_str,
-            task.advisor or "auto",
-            task.mode,
-            last_run,
+            _schedule_interval_label(task.interval_seconds),
+            task.mode + (f" · {task.profile}" if task.profile else "") + (f" · {task.advisor}" if task.advisor else ""),
             status,
+            last,
+            _schedule_cost_label(task),
         )
 
     console.print(table)
-    console.print(
-        f"\n[dim]{len(tasks)} task(s)"
-        " | Run 'nvh schedule start' to execute due tasks[/dim]"
-    )
+    runner = runner_status()
+    if runner["active"]:
+        who = "the API server" if runner.get("runner") != "cli" else "`nvh schedule start`"
+        console.print(f"\n[dim]{len(tasks)} task(s) | {who} is running schedules (pid {runner['pid']})[/dim]")
+    else:
+        console.print(
+            f"\n[dim]{len(tasks)} task(s)"
+            " | Run 'nvh schedule start' to execute due tasks[/dim]"
+        )
+    if any(t.last_status == "error" and t.last_error for t in tasks):
+        for t in tasks:
+            if t.last_status == "error" and t.last_error:
+                console.print(f"[red]{t.id}[/red]: {t.last_error[:160]}")
 
 
 @schedule_app.command("remove")
@@ -11409,6 +11527,52 @@ def schedule_remove(
         raise typer.Exit(1)
 
 
+@schedule_app.command("enable")
+def schedule_enable(
+    task_id: str = typer.Argument(..., help="Task ID to enable"),
+):
+    """Enable a scheduled task so it becomes due again."""
+    scheduler, task = _schedule_or_exit(task_id)
+    scheduler.set_enabled(task.id, True)
+    console.print(f"[green]Enabled:[/green] {task.id} — {task.name or task.prompt[:60]}")
+
+
+@schedule_app.command("disable")
+def schedule_disable(
+    task_id: str = typer.Argument(..., help="Task ID to disable"),
+):
+    """Disable a scheduled task without removing it."""
+    scheduler, task = _schedule_or_exit(task_id)
+    scheduler.set_enabled(task.id, False)
+    console.print(f"[yellow]Disabled:[/yellow] {task.id} — {task.name or task.prompt[:60]}")
+
+
+@schedule_app.command("run")
+def schedule_run(
+    task_id: str = typer.Argument(..., help="Task ID to run now"),
+):
+    """Run one scheduled task now (synchronously) and record the run on the schedule.
+
+    The run is a ``schedule-run`` job under $NVH_HOME/jobs/ like the daemon's,
+    and the outcome lands in `nvh schedule list`. While the API server holds
+    the scheduler lock it is the runner for `ask` and `convene` schedules
+    (use Run now on the Schedules page, POST /v1/schedules/{id}/run, so one
+    process runs them); a `do` schedule, which the API never runs, runs here.
+    """
+    from nvh.integrations.services import schedule_runner as runner
+
+    _scheduler, task = _schedule_or_exit(task_id)
+    status = runner.runner_status()
+    if status["active"] and task.mode != "do":
+        console.print(
+            f"[yellow]{_SCHEDULE_API_RUNNING}[/yellow] — Run now on the Schedules page"
+            f" (POST /v1/schedules/{task.id}/run) runs it in that process; this command runs only `do` schedules"
+            " while the server holds the lock."
+        )
+        raise typer.Exit(1)
+    _run(_schedule_runner_once(task_id=task_id))
+
+
 @schedule_app.command("start")
 def schedule_start(
     interval: int = typer.Option(60, "--interval", "-i", help="Poll interval in seconds"),
@@ -11416,7 +11580,11 @@ def schedule_start(
 ):
     """Start the scheduler daemon (runs in foreground, polls for due tasks).
 
-    Press Ctrl+C to stop.
+    The API server runs schedules itself while it is up; this command defers
+    to it (one runner per store) and otherwise holds the scheduler lock. Mode
+    `do` schedules run here with safe tools auto-approved — never under the
+    API. With `--once` beside a live API runner only the due `do` schedules
+    run (the server runs the rest within its poll). Press Ctrl+C to stop.
 
     Examples:
 
@@ -11424,76 +11592,171 @@ def schedule_start(
 
       nvh schedule start --once     # run any due tasks right now, then exit
     """
+    from nvh.integrations.services import schedule_runner as runner
 
-    from nvh.core.notify import notify_task_complete
-    from nvh.core.scheduler import Scheduler
+    status = runner.runner_status()
+    if status["active"] and not once:
+        if status.get("runner") == runner.RUNNER_CLI:
+            console.print(
+                f"[yellow]another `nvh schedule start` (pid {status['pid']}) is running schedules;"
+                " use `nvh schedule list`[/yellow]"
+            )
+        else:
+            console.print(f"[yellow]{_SCHEDULE_API_RUNNING}[/yellow]")
+        raise typer.Exit(0)
 
-    scheduler = Scheduler()
-
-    async def _run_task(task):
-        from nvh.config.settings import load_config
-        from nvh.core.engine import Engine
-
-        config = load_config()
-        engine = Engine(config=config)
-        await engine.initialize()
-
-        provider_override = task.advisor or None
-
-        try:
-            if task.mode == "do":
-                from nvh.core.agent_loop import run_agent_loop
-                from nvh.core.tools import ToolRegistry
-                tools = ToolRegistry()
-                result = await run_agent_loop(
-                    task=task.prompt,
-                    engine=engine,
-                    tools=tools,
-                    provider=provider_override,
-                    auto_approve_safe=True,
-                )
-                response_text = result.final_response
-            else:
-                resp = await engine.query(
-                    prompt=task.prompt,
-                    provider=provider_override,
-                )
-                response_text = resp.content
-
-            scheduler.mark_run(task.id, status="ok")
-            await notify_task_complete(task.prompt[:50], response_text)
-            return response_text
-
-        except Exception as e:
-            scheduler.mark_run(task.id, status="error", error=str(e))
-            await notify_task_complete(task.prompt[:50], f"Error: {e}", "")
-            return f"Error: {e}"
+    if once:
+        if status["active"]:
+            console.print(
+                "[dim]Note: a live runner holds the scheduler lock and runs the ask/convene schedules"
+                " within its poll; running only the due `do` schedules here.[/dim]"
+            )
+            _run(_schedule_runner_once(only_modes={"do"}))
+        else:
+            _run(_schedule_runner_once())
+        return
 
     async def _daemon():
         console.print(f"[bold cyan]Scheduler started[/bold cyan] (polling every {interval}s)")
         console.print("[dim]Press Ctrl+C to stop.[/dim]\n")
+        engine = await runner.default_engine()
 
-        while True:
-            due = scheduler.get_due_tasks()
-            if due:
-                console.print(f"[dim]{len(due)} due task(s)...[/dim]")
-                for task in due:
-                    console.print(f"  Running: [bold]{task.id}[/bold] — {task.prompt[:60]}")
-                    result_text = await _run_task(task)
-                    preview = result_text[:120].replace("\n", " ")
-                    console.print(f"  [green]Done:[/green] {preview}\n")
+        async def _engine():
+            return engine
 
-            if once:
-                if not due:
-                    console.print("[dim]No due tasks.[/dim]")
-                break
-
-            await asyncio.sleep(interval)
+        stop = asyncio.Event()
+        with runner.cli_engine_scope(engine):
+            ran = await runner.run_loop(
+                stop,
+                poll_s=max(1, interval),
+                runner=runner.RUNNER_CLI,
+                engine_factory=_engine,
+                allow_do=True,
+                notify=True,
+                on_start=lambda task, job_id: console.print(f"  Running: [bold]{task.id}[/bold] — {task.prompt[:60]}"),
+                on_done=_print_schedule_run,
+            )
+        if not ran:
+            console.print(f"[yellow]{_SCHEDULE_API_RUNNING}[/yellow]")
 
     try:
-        asyncio.run(_daemon())
+        _run(_daemon())
     except KeyboardInterrupt:
         console.print("\n[dim]Scheduler stopped.[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# nvh vault — the Markdown memory vault under $NVH_HOME/vault
+# ---------------------------------------------------------------------------
+
+vault_app = typer.Typer(help="The Markdown memory vault under $NVH_HOME/vault (status, notes, forget, upgrade)")
+app.add_typer(vault_app, name="vault", rich_help_panel="Subcommands")
+
+
+@vault_app.command("status")
+def vault_status_cmd():
+    """Show whether the vault is initialised, where it lives and how many notes it holds."""
+    from nvh.integrations.workspace.vault import vault_status
+
+    status = vault_status()
+    state = "[green]initialised[/green]" if status["initialized"] else "[yellow]not initialised[/yellow]"
+    console.print(f"Vault: {state}  [dim]{status['vault_dir']}[/dim]")
+    console.print(f"  Notes:    {status['markdown_files']} markdown file(s), {status['memory_files']} under Wizard Memory/")
+    obsidian = status.get("obsidian") or {}
+    console.print(f"  Obsidian: {'installed' if obsidian.get('installed') else 'not installed (optional)'}")
+    if not status["initialized"]:
+        console.print("[dim]Run 'nvh vault init' to create it.[/dim]")
+
+
+@vault_app.command("init")
+def vault_init_cmd():
+    """Create the vault folder tree and seed the starter notes (idempotent)."""
+    from nvh.integrations.workspace.vault import init_vault
+
+    result = init_vault()
+    console.print(f"[green]Vault ready:[/green] {result['vault_dir']}  [dim]{result['markdown_files']} note(s)[/dim]")
+
+
+@vault_app.command("list")
+def vault_list_cmd(
+    category: str = typer.Option("", "--category", "-c", help="Only this vault folder (e.g. 'Wizard Memory')"),
+    tag: str = typer.Option("", "--tag", "-t", help="Only notes carrying this tag"),
+    memory_only: bool = typer.Option(False, "--memory-only", help="Records only (nvh-memory/1 and legacy); hide seeded doc notes"),
+    limit: int = typer.Option(50, "--limit", "-n", help="Most recent N notes"),
+):
+    """List the vault's notes, newest first (headers only)."""
+    from nvh.integrations.workspace.vault import list_vault_notes
+
+    records = list_vault_notes(
+        category=category or None, tag=tag or None, memory_only=memory_only, limit=max(1, limit),
+    )
+    if not records:
+        console.print("[dim]No notes match.[/dim]")
+        return
+    table = Table(title="Vault notes")
+    table.add_column("ID", style="bold cyan", min_width=32, no_wrap=True)
+    table.add_column("Schema", style="dim")
+    table.add_column("Created", style="dim")
+    table.add_column("Category")
+    table.add_column("Title")
+    table.add_column("Tags", style="dim")
+    for record in records:
+        table.add_row(
+            record.id,
+            record.schema,
+            record.created[:16].replace("T", " ") if record.created else "",
+            record.category or "[dim]root[/dim]",
+            record.title[:60],
+            " ".join(f"#{t}" for t in record.tags),
+        )
+    console.print(table)
+    console.print(f"[dim]{len(records)} note(s) | nvh vault forget <id> removes one[/dim]")
+
+
+@vault_app.command("forget")
+def vault_forget_cmd(
+    note_id: str = typer.Argument(..., help="Note id (nvh vault list shows them)"),
+):
+    """Remove one vault note and drop its RAG chunks."""
+    from nvh.integrations.workspace.vault import delete_vault_note
+
+    result = delete_vault_note(note_id)
+    if not result.get("deleted"):
+        console.print(f"[red]{result.get('error', 'unknown note id')}:[/red] {note_id}")
+        raise typer.Exit(1)
+    chunks = 0
+    try:
+        from nvh.integrations.rag import forget_vault_note
+
+        chunks = int(_run(forget_vault_note(result["path"])))
+    except Exception as exc:  # the index is derived; the file is already gone
+        console.print(f"[dim]RAG chunks not dropped ({exc}); `nvh rag ingest` rebuilds the index.[/dim]")
+    console.print(f"[green]Forgot:[/green] {result['path']}  [dim]{chunks} chunk(s) removed[/dim]")
+
+
+@vault_app.command("upgrade")
+def vault_upgrade_cmd(
+    add_ids: bool = typer.Option(False, "--add-ids", help="Give pre-0.46 notes their Id/Schema/Source header lines"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report what would change without writing"),
+):
+    """Upgrade pre-0.46 vault notes in place: --add-ids inserts the three header lines, body untouched."""
+    if not add_ids:
+        console.print("[yellow]Nothing selected.[/yellow] Pass --add-ids to give legacy notes their header lines.")
+        raise typer.Exit(1)
+    from nvh.integrations.workspace.vault import upgrade_vault_notes
+
+    result = upgrade_vault_notes(dry_run=dry_run)
+    verb = "Would upgrade" if dry_run else "Upgraded"
+    console.print(
+        f"[green]{verb} {result['upgraded']} note(s)[/green], skipped {result['skipped']}"
+        + (f", [red]{len(result['errors'])} error(s)[/red]" if result["errors"] else "")
+    )
+    for note in result["notes"]:
+        console.print(f"  {note['id']}  [dim]{note['path']}[/dim]")
+    for error in result["errors"]:
+        console.print(f"  [red]{error}[/red]")
+    if result["errors"]:
+        raise typer.Exit(1)
 
 
 # ---------------------------------------------------------------------------

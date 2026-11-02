@@ -60,7 +60,7 @@ from typing import Any
 
 from nvh.core.atohi import ResourcePaused
 from nvh.core.engine import BudgetExceededError
-from nvh.providers.base import CompletionResponse, FinishReason, StreamChunk, Usage
+from nvh.providers.base import CompletionResponse, FinishReason, Message, StreamChunk, Usage
 from nvh.providers.specs import PROVIDER_SPECS
 
 logger = logging.getLogger(__name__)
@@ -360,6 +360,59 @@ def openai_messages_to_nvhive(messages: list[dict[str, Any]]) -> tuple[str, str 
     return prompt, system_prompt
 
 
+def _text_of(content: Any) -> str:
+    """The text of an OpenAI message ``content``: a string as is, a parts list's text blocks joined."""
+    if isinstance(content, list):
+        return " ".join(
+            str(block.get("text", ""))
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    return "" if content is None else str(content)
+
+
+def openai_messages_to_nvhive_history(
+    messages: list[dict[str, Any]],
+) -> tuple[str, str | None, list[Any]]:
+    """Split an OpenAI messages list into ``(prompt, system_prompt, history)`` for ``Engine.query``.
+
+    The forwarding form of :func:`openai_messages_to_nvhive` (0.46, O12): the
+    **last user message** is the prompt (its text, parts flattened), every
+    ``system`` message joins the system prompt, and every other message —
+    earlier user turns, assistant turns with their ``tool_calls``, ``tool``
+    results with their ``tool_call_id``, ``name`` — becomes a
+    :class:`~nvh.providers.base.Message` in order, the shape ``Engine.query``'s
+    ``history`` takes (``nvh.sdk._messages_to_internal`` keeps those fields;
+    the flattener dropped them). ``history`` is ``[]`` for a single-turn
+    request, so the engine builds exactly the messages it did before.
+
+    A transcript that ends in an assistant or ``tool`` message (an agent loop
+    posting tool results back) has no new user turn: the prompt is ``""`` and
+    the whole transcript is the history, in order. The engine appends the
+    prompt as a user message, so the caller decides what an empty prompt means.
+    """
+    from nvh.sdk import _messages_to_internal
+
+    system_parts: list[str] = []
+    rest: list[dict[str, Any]] = []
+    for msg in messages:
+        role = str(msg.get("role") or "user")
+        if role == "system":
+            text = _text_of(msg.get("content", ""))
+            if text:
+                system_parts.append(text)
+            continue
+        rest.append({**msg, "role": role})
+
+    prompt = ""
+    if rest and rest[-1]["role"] == "user":
+        prompt = _text_of(rest.pop().get("content", ""))
+
+    history = _messages_to_internal(rest) if rest else []
+    system_prompt = "\n\n".join(system_parts) if system_parts else None
+    return prompt, system_prompt, history
+
+
 def format_openai_response(
     content: str,
     model: str,
@@ -368,9 +421,22 @@ def format_openai_response(
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
     finish_reason: str = "stop",
+    tool_calls: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Build an OpenAI-format chat completion response dict."""
+    """Build an OpenAI-format chat completion response dict.
+
+    ``tool_calls`` (the wire shape ``CompletionResponse.tool_calls`` carries:
+    ``{id, type: "function", function: {name, arguments}}``) is written to
+    ``message.tool_calls`` and the choice finishes with ``"tool_calls"``, as
+    an OpenAI client expects before it runs the tools; ``content`` is then
+    ``null`` when the model said nothing beside the calls.
+    """
     now = int(time.time())
+    message: dict[str, Any] = {"role": "assistant", "content": content}
+    if tool_calls:
+        message["tool_calls"] = list(tool_calls)
+        message["content"] = content or None
+        finish_reason = "tool_calls"
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
         "object": "chat.completion",
@@ -380,10 +446,7 @@ def format_openai_response(
         "choices": [
             {
                 "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": content,
-                },
+                "message": message,
                 "logprobs": None,
                 "finish_reason": finish_reason,
             }
@@ -407,13 +470,28 @@ async def openai_stream_generator(
     temperature: float | None,
     max_tokens: int | None,
     requested_model: str,
+    *,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: Any = None,
+    include_usage: bool = False,
+    history: list[Message] | None = None,
 ) -> AsyncGenerator[bytes, None]:
     """Yield SSE bytes in OpenAI streaming format.
 
     Produces ``data: {...}`` lines followed by ``data: [DONE]``.
-    """
-    from nvh.providers.base import Message
 
+    ``tools`` / ``tool_choice`` (the OpenAI function-calling shape) are handed
+    to the provider's ``stream``; when its final chunk carries native
+    ``tool_calls`` (the way the Wizard's ``_filtered_token_stream`` receives
+    them) one ``delta.tool_calls`` chunk goes out before a finish chunk with
+    ``finish_reason: "tool_calls"``. ``include_usage`` (``stream_options``)
+    adds the usage-only chunk (``choices: []``) after the finish chunk and
+    before ``[DONE]``. ``history`` (earlier turns as ``Message`` objects, the
+    shape ``Engine.query(history=)`` takes) goes to the provider between the
+    system prompt and the final user message, so a streamed multi-turn
+    request sees the same messages the non-stream path builds (0.46 §5,
+    O12). All three default to today's behaviour.
+    """
     config = engine.config
     temp = temperature if temperature is not None else config.defaults.temperature
     max_tok = max_tokens or config.defaults.max_tokens
@@ -457,6 +535,8 @@ async def openai_stream_generator(
     messages: list[Message] = []
     if sys_prompt:
         messages.append(Message(role="system", content=sys_prompt))
+    if history:
+        messages.extend(history)
     messages.append(Message(role="user", content=prompt))
 
     effective_model = decision.model or requested_model or "nvhive"
@@ -487,6 +567,11 @@ async def openai_stream_generator(
     last_chunk: StreamChunk | None = None
     failed = False
     started = time.monotonic()
+    stream_kwargs: dict[str, Any] = {}
+    if tools:
+        stream_kwargs["tools"] = tools
+        if tool_choice is not None:
+            stream_kwargs["tool_choice"] = tool_choice
     try:
         aiter = provider.stream(
             messages=messages,
@@ -494,6 +579,7 @@ async def openai_stream_generator(
             temperature=temp,
             max_tokens=max_tok,
             system_prompt=sys_prompt,
+            **stream_kwargs,
         ).__aiter__()
 
         while True:
@@ -529,6 +615,25 @@ async def openai_stream_generator(
                 yield f"data: {json.dumps(content_chunk)}\n\n".encode()
 
             if chunk.is_final:
+                finish_reason = chunk.finish_reason.value if chunk.finish_reason else "stop"
+                native_calls = getattr(chunk, "tool_calls", None)
+                if isinstance(native_calls, list) and native_calls:
+                    tool_call_chunk = {
+                        "id": chat_id,
+                        "object": "chat.completion.chunk",
+                        "created": now,
+                        "model": effective_model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"tool_calls": _stream_tool_call_deltas(native_calls)},
+                                "logprobs": None,
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                    yield f"data: {json.dumps(tool_call_chunk)}\n\n".encode()
+                    finish_reason = "tool_calls"
                 finish_chunk = {
                     "id": chat_id,
                     "object": "chat.completion.chunk",
@@ -539,9 +644,7 @@ async def openai_stream_generator(
                             "index": 0,
                             "delta": {},
                             "logprobs": None,
-                            "finish_reason": (
-                                chunk.finish_reason.value if chunk.finish_reason else "stop"
-                            ),
+                            "finish_reason": finish_reason,
                         }
                     ],
                 }
@@ -570,7 +673,54 @@ async def openai_stream_generator(
 
     if finish_chunk is not None:
         yield f"data: {json.dumps(finish_chunk)}\n\n".encode()
+    if include_usage and not failed:
+        usage_chunk = {
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": now,
+            "model": effective_model,
+            "choices": [],
+            "usage": _stream_usage_dict(last_chunk),
+        }
+        yield f"data: {json.dumps(usage_chunk)}\n\n".encode()
     yield b"data: [DONE]\n\n"
+
+
+def _stream_tool_call_deltas(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Wire-shape tool calls as the ``delta.tool_calls`` entries of one streaming chunk.
+
+    Each entry gains its ``index``; ``function.arguments`` is the JSON string
+    the wire shape already carries (a dict is serialised), and a missing
+    ``id`` becomes ``call_<n>``, the fallback the adapters use.
+    """
+    deltas: list[dict[str, Any]] = []
+    for index, call in enumerate(calls):
+        call = call if isinstance(call, dict) else {}
+        function = call.get("function")
+        function = function if isinstance(function, dict) else {}
+        arguments = function.get("arguments", "")
+        if not isinstance(arguments, str):
+            arguments = json.dumps(arguments, default=str)
+        deltas.append({
+            "index": index,
+            "id": str(call.get("id") or f"call_{index}"),
+            "type": "function",
+            "function": {"name": str(function.get("name") or ""), "arguments": arguments},
+        })
+    return deltas
+
+
+def _stream_usage_dict(chunk: StreamChunk | None) -> dict[str, int]:
+    """The OpenAI ``usage`` object for a finished stream: the final chunk's counts, zeros if none."""
+    usage = chunk.usage if chunk is not None and chunk.usage is not None else None
+    prompt_tokens = int(usage.input_tokens or 0) if usage is not None else 0
+    completion_tokens = int(usage.output_tokens or 0) if usage is not None else 0
+    total = int(usage.total_tokens or 0) if usage is not None else 0
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total or prompt_tokens + completion_tokens,
+    }
 
 
 def _sse_choices(

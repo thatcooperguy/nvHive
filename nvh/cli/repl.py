@@ -652,6 +652,18 @@ async def _run_do_command_async(task: str, session: ReplSession, engine: Engine)
             console.print("  [dim](no tools — generating final answer)[/dim]")
         console.print()
 
+    def confirm_unsafe(tool_name: str, tool_args: dict) -> bool:
+        # A confirm-class tool (``imagine`` since 0.46: it bills an image
+        # key) asks here, the way ``nvh do`` asks; ``auto_approve_safe``
+        # still covers the read-only tools. EOF or Ctrl+C is a refusal.
+        args_str = ", ".join(f"{k}={repr(v)[:40]}" for k, v in tool_args.items())
+        console.print(f"\n[yellow]Agent wants to:[/yellow] {tool_name}({args_str})")
+        try:
+            answer = input("Allow? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        return answer in ("y", "yes")
+
     result = await run_agent_loop(
         task=task,
         engine=engine,
@@ -660,6 +672,7 @@ async def _run_do_command_async(task: str, session: ReplSession, engine: Engine)
         model=session.model,
         auto_approve_safe=True,
         on_step=on_step,
+        confirm_unsafe=confirm_unsafe,
     )
 
     elapsed = _time.monotonic() - start

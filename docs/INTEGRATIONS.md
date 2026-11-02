@@ -56,7 +56,10 @@ reach for first:
 | `GET/POST /v1/conversations...` | server-side chat history and search |
 | `POST /v1/rag/ingest`, `POST /v1/rag/ask` | the local RAG store |
 | `POST /v1/wizard/chat`, `POST /v1/wizard/chat/stream` | the AI Wizard |
-| `GET /v1/setup/*`, `GET /v1/jobs/*` | setup state and background install jobs |
+| `GET /v1/setup/*`, `GET /v1/jobs/*` | setup state and background jobs (`GET /v1/jobs` filters `kind`, `status_filter`, `limit` and, since 0.46, `exclude_kind` and `schedule_id`) |
+| `GET`/`POST /v1/schedules`, `GET`/`PATCH`/`DELETE /v1/schedules/{id}`, `POST /v1/schedules/{id}/run`, `GET /v1/schedules/{id}/runs` | scheduled prompts and their runs (0.46; [CONFIGURATION.md](CONFIGURATION.md#schedule-records-nvh-schedules2)) |
+| `POST /v1/vault/memory`, `GET /v1/vault/notes`, `GET`/`DELETE /v1/vault/notes/{id}` | the Memory Vault's records (0.46; [CONFIGURATION.md](CONFIGURATION.md#memory-records-nvh-memory1)) |
+| `GET /v1/outputs/images/{scope}/{filename}` | images the Wizard generated (0.46, authenticated) |
 | `GET /v1/health`, `GET /v1/ready` | liveness; readiness summary (auth-gated) |
 | `POST /v1/workspace/snapshot/export` / `import` | the same bundle as `nvh snapshot` |
 
@@ -108,6 +111,26 @@ provider against `/models` should keep `.../v1/proxy` as its base URL.
 `OPENAI_BASE_URL` is the variable the OpenAI SDK reads; LangChain and LiteLLM
 also accept the older `OPENAI_API_BASE` spelling.
 
+Since 0.46 the shared chat handler behind `/v1/chat/completions` and
+`/v1/proxy/chat/completions` forwards a multi-turn transcript as history
+instead of flattening it: the last `user` message is the prompt, every
+`system` message joins the system prompt, and every other turn — earlier user
+and assistant turns, an assistant's `tool_calls`, `tool` results with their
+`tool_call_id` and `name` — reaches the model in order, on the streamed and
+the non-streamed path alike. The header `x-nvhive-history: flatten` restores
+the pre-0.46 single `User:` / `Assistant:` string. Council (`council:N`) and
+throwdown take one prompt and always see the transcript flattened, and so
+does a transcript with no trailing user message (an agent loop posting tool
+results back) — it is answered, not refused. `tools` and `tool_choice`
+round-trip: a non-streamed answer carries `message.tool_calls` with
+`finish_reason: "tool_calls"` (`content` is `null` when the model said
+nothing else); a stream emits one `delta.tool_calls` chunk, then the finish
+chunk with `finish_reason: "tool_calls"`, then `[DONE]`. `stream_options:
+{"include_usage": true}` adds the usage-only chunk (`choices: []`) between the
+finish chunk and `[DONE]`; `response_format` is accepted and not enforced.
+`GET /v1/proxy/health` lists `standard_paths`, `tools` and `history` under
+`features`.
+
 Streamed completions on every proxy path honour `budget.hard_stop` — the
 stream carries one `budget_exceeded` error event instead of tokens — and are
 written to the query ledger like the non-streamed ones, so `nvh budget` and
@@ -115,7 +138,14 @@ written to the query ledger like the non-streamed ones, so `nvh budget` and
 column: a streamed call is logged as `mode: proxy`, a non-streamed call on the
 same route goes through `Engine.query` and is logged as `mode: simple` (the
 mode `nvh ask` writes), so `/metrics` and `nvh history` show proxy streams
-under their own label while the budget totals sum both.
+under their own label while the budget totals sum both. A streamed call
+through an OpenAI-compatible provider asks for `stream_options.include_usage`
+whenever LiteLLM's parameter table says the route takes it (derived from
+`litellm.get_supported_openai_params`, never from a provider list), so its
+ledger row carries the provider's prompt and completion counts; a route
+LiteLLM says lacks it keeps the pre-0.46 estimate (0 input tokens, output
+estimated from the text), and a caller's own `stream_options` is never
+overridden.
 
 With `HIVE_API_KEY` set, every proxy path needs the key as a bearer token —
 the Anthropic proxy included since 0.46: `OPENAI_API_KEY=<key>` and

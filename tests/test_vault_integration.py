@@ -13,6 +13,18 @@ from nvh.api.server import app
 from nvh.integrations import vault
 
 
+@pytest.fixture()
+def no_indexer(monkeypatch):
+    """``POST /v1/vault/memory`` indexes the saved note for real (the Ollama embedder, which may even
+    auto-pull a model); the route tests here want the write, not the network. The indexer is doubled
+    and its calls recorded."""
+    from unittest.mock import AsyncMock
+
+    double = AsyncMock(return_value=False)
+    monkeypatch.setattr("nvh.integrations.rag.index_vault_note", double)
+    return double
+
+
 def test_init_vault_creates_markdown_memory_tree(tmp_path) -> None:
     home = tmp_path / "nvhive"
 
@@ -108,7 +120,7 @@ def test_obsidian_status_reports_optional_rootless_app(tmp_path, monkeypatch) ->
     assert status["download_url"] == vault.OBSIDIAN_DOWNLOAD_PAGE
 
 
-def test_vault_api_routes_create_rootless_vault(tmp_path) -> None:
+def test_vault_api_routes_create_rootless_vault(tmp_path, no_indexer) -> None:
     home = tmp_path / "nvhive"
     client = TestClient(app)
 
@@ -135,6 +147,12 @@ def test_vault_api_routes_create_rootless_vault(tmp_path) -> None:
     assert memory_data["schema"] == "nvh-memory/1" and len(memory_data["id"]) == 32
     assert memory_data["redacted"] == 0
     assert "Source: api" in Path(memory_data["path"]).read_text(encoding="utf-8")
+    # 0.46: the route indexed (here: the double) the note it wrote, in the request's home; ``indexed``
+    # reports the indexer's answer.
+    assert memory_data["indexed"] is False
+    assert no_indexer.await_count == 1
+    assert no_indexer.await_args.args[0] == Path(memory_data["path"])
+    assert no_indexer.await_args.kwargs["home_dir"] == str(home)
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +361,7 @@ def test_vault_status_counts_memory_files_without_parsing(tmp_path) -> None:
     assert vault.vault_status(tmp_path / "missing")["memory_files"] == 0
 
 
-def test_vault_memory_route_refuses_a_secret_only_body_with_a_400(tmp_path) -> None:
+def test_vault_memory_route_refuses_a_secret_only_body_with_a_400(tmp_path, no_indexer) -> None:
     """The writer's refusal is a client-input condition: a 400 carrying its words
     (the text the REPL prints), not a 500 with a server traceback."""
     home = tmp_path / "nvhive"
@@ -365,6 +383,7 @@ def test_vault_memory_route_refuses_a_secret_only_body_with_a_400(tmp_path) -> N
     assert saved.status_code == 200
     assert saved.json()["data"]["source"] == "web"
     assert "Source: web" in Path(saved.json()["data"]["path"]).read_text(encoding="utf-8")
+    assert no_indexer.await_count == 1, "the refused body was never indexed; the saved one was"
 
 
 def test_delete_vault_note_refuses_a_path_that_resolves_outside_the_vault(tmp_path, monkeypatch) -> None:
@@ -428,3 +447,123 @@ def test_a_lone_known_header_line_is_body_text_not_a_record(tmp_path) -> None:
     }
     assert {"README.md", "MAP.md"} <= set(roots)
     assert all(r.category == "" and r.schema == "doc" for r in roots.values())
+
+
+# ---------------------------------------------------------------------------
+# nvh vault upgrade --add-ids (design 0.46 §2, contract C6)
+# ---------------------------------------------------------------------------
+
+
+def _legacy_note(home: Path, name: str = "2026-01-01T000000Z0000-Old-note.md", *, eol: str = "\n", tags: str = "#repl #old") -> Path:
+    vault.init_vault(home)
+    path = home / "vault" / "Wizard Memory" / name
+    text = (
+        "# Old note\n\nCreated: 2026-01-01T00:00:00+00:00\nCategory: Wizard Memory\n"
+        f"Tags: {tags}\n\nbody line 1\n\n  body line 2 with trailing spaces  \n\n\nlast line\n"
+    ).replace("\n", eol)
+    path.write_bytes(text.encode("utf-8"))
+    return path
+
+
+@pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_upgrade_inserts_exactly_three_header_lines_and_keeps_body_bytes_and_eol(tmp_path, eol) -> None:
+    home = tmp_path / "nvhive"
+    path = _legacy_note(home, eol=eol)
+    before = path.read_bytes()
+    derived = vault.derived_note_id(path)
+    body_before = before.split((eol + eol).encode("utf-8"), 2)[2]
+
+    result = vault.upgrade_vault_note(path, home_dir=home)
+
+    assert result["upgraded"] is True and result["id"] == derived and result["added"] == 3
+    after = path.read_bytes()
+    assert after.count(b"\r\n") == (after.count(b"\n") if eol == "\r\n" else 0), "the file keeps its own line endings"
+    lines_before = before.decode("utf-8").split(eol)
+    lines_after = after.decode("utf-8").split(eol)
+    assert len(lines_after) == len(lines_before) + 3
+    assert lines_after[:2] == ["# Old note", ""]
+    assert lines_after[2:9] == [
+        f"Id: {derived}", "Schema: nvh-memory/1", "Created: 2026-01-01T00:00:00+00:00",
+        "Category: Wizard Memory", "Tags: #repl #old", "Source: repl", "",
+    ]
+    assert after.split((eol + eol).encode("utf-8"), 2)[2] == body_before, "the body is byte for byte the same"
+    record = vault.parse_vault_note(after.decode("utf-8"), path=path)
+    assert record.schema == "nvh-memory/1" and record.id == derived and record.source == "repl"
+    assert record.body == "body line 1\n\n  body line 2 with trailing spaces  \n\n\nlast line"
+    assert not any(p.name.endswith(".tmp") for p in path.parent.iterdir())
+
+    # Idempotent: a second pass changes nothing and says why.
+    again = vault.upgrade_vault_note(path, home_dir=home)
+    assert again["upgraded"] is False and again["reason"] == "already nvh-memory/1" and again["id"] == derived
+    assert path.read_bytes() == after
+
+
+def test_upgrade_source_is_api_without_the_repl_tag_and_the_id_is_the_derived_one(tmp_path) -> None:
+    home = tmp_path / "nvhive"
+    path = _legacy_note(home, name="2026-02-02T000000Z0000-Plain.md", tags="#old")
+    listed_before = {r.id for r in vault.list_vault_notes(home_dir=home, memory_only=True)}
+
+    assert vault.upgrade_vault_note(path, home_dir=home)["upgraded"] is True
+    text = path.read_text(encoding="utf-8")
+    assert "Source: api\n\nbody line 1" in text and f"Id: {vault.derived_note_id(path)}" in text
+    # The id a reader derived before the upgrade is the one written, so links keep resolving.
+    assert {r.id for r in vault.list_vault_notes(home_dir=home, memory_only=True)} == listed_before
+    assert vault.get_vault_note(vault.derived_note_id(path), home_dir=home).schema == "nvh-memory/1"
+
+
+def test_upgrade_skips_doc_and_record_notes_and_dry_run_writes_nothing(tmp_path) -> None:
+    home = tmp_path / "nvhive"
+    legacy = _legacy_note(home)
+    seeded = home / "vault" / "Wizard Memory" / "AI Wizard.md"
+    fresh = Path(vault.append_vault_memory("New", "A 0.46 record.", home_dir=home)["path"])
+    snapshot = {p: p.read_bytes() for p in (legacy, seeded, fresh)}
+
+    doc = vault.upgrade_vault_note(seeded, home_dir=home)
+    assert doc["upgraded"] is False and doc["reason"].startswith("doc note")
+    rec = vault.upgrade_vault_note(fresh, home_dir=home)
+    assert rec["upgraded"] is False and rec["reason"] == "already nvh-memory/1"
+
+    dry = vault.upgrade_vault_notes(home_dir=home, dry_run=True)
+    assert dry["upgraded"] == 1 and dry["errors"] == [] and dry["dry_run"] is True
+    assert [n["path"] for n in dry["notes"]] == [str(legacy)]
+    assert dry["skipped"] >= 2
+    assert {p: p.read_bytes() for p in snapshot} == snapshot, "a dry run writes nothing"
+
+    real = vault.upgrade_vault_notes(home_dir=home)
+    assert real["upgraded"] == 1 and real["errors"] == []
+    assert seeded.read_bytes() == snapshot[seeded] and fresh.read_bytes() == snapshot[fresh]
+    assert b"Schema: nvh-memory/1" in legacy.read_bytes()
+    second = vault.upgrade_vault_notes(home_dir=home)
+    assert second["upgraded"] == 0 and second["skipped"] == real["skipped"] + 1
+
+
+def test_upgrade_refuses_a_note_outside_the_vault(tmp_path) -> None:
+    """``upgrade_vault_note`` carries the same resolved-path boundary as the other vault writers and
+    readers: a legacy-shaped file outside ``<home>/vault`` is refused unread and unwritten."""
+    home = tmp_path / "nvhive"
+    vault.init_vault(home)
+    outside = tmp_path / "elsewhere" / "Old-note.md"
+    outside.parent.mkdir()
+    outside.write_text(
+        "# Old note\n\nCreated: 2026-01-01T00:00:00+00:00\nCategory: Wizard Memory\nTags: #old\n\nbody\n",
+        encoding="utf-8",
+    )
+    before = outside.read_bytes()
+    result = vault.upgrade_vault_note(outside, home_dir=home)
+    assert result == {"upgraded": False, "id": "", "reason": "note is outside the vault", "path": str(outside)}
+    assert outside.read_bytes() == before
+    # ``home_dir=None`` reads the process home (``init_vault(home)`` exported it): still outside.
+    assert vault.upgrade_vault_note(outside)["reason"] == "note is outside the vault"
+    inside = _legacy_note(home, name="2026-03-03T000000Z0000-Inside.md")
+    assert vault.upgrade_vault_note(inside, home_dir=home)["upgraded"] is True
+    assert vault.upgrade_vault_notes(home_dir=home)["errors"] == []
+
+
+def test_upgrade_reports_unreadable_notes_as_errors(tmp_path) -> None:
+    home = tmp_path / "nvhive"
+    vault.init_vault(home)
+    bad = home / "vault" / "Wizard Memory" / "bad.md"
+    bad.write_bytes(b"# Bad\n\nCreated: x\nCategory: Wizard Memory\nTags: none\n\n\xff\xfe not utf-8\n")
+    result = vault.upgrade_vault_notes(home_dir=home)
+    assert result["upgraded"] == 0 and len(result["errors"]) == 1 and str(bad) in result["errors"][0]
+    assert result["errors"][0].split(": ", 1)[1].startswith("could not read")

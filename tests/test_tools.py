@@ -110,6 +110,16 @@ class TestToolRegistryExtended:
                     "screenshot", "imagine"}
         assert expected.issubset(names)
 
+    def test_imagine_is_confirm_class(self):
+        """O3 (0.46): image generation bills the user's key, so the agent loop asks first and
+        ``/v1/smart`` refuses it; the read-only built-ins stay auto."""
+        reg = ToolRegistry(include_system=False)
+        imagine = reg.get("imagine")
+        assert imagine.safety_class == "confirm" and imagine.safe is False
+        assert imagine.summary_template == "Generate an image: {prompt}"
+        assert reg.get("read_file").safety_class == "auto"
+        assert reg.get("list_files").safety_class == "auto"
+
     def test_resolve_path_within_workspace(self):
         reg = ToolRegistry(workspace="/home/user/project", include_system=False)
         resolved = reg._resolve_path("src/main.py")
@@ -439,6 +449,39 @@ class TestOneRegistryExecute:
         assert refused["approval_required"] is True and handler.await_count == 0
         ok = await agent.execute("priv", {"a": 1}, confirmed=True, approval_token=card["approval_token"])
         assert ok["ok"] is True and handler.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_confirm_tool_with_a_planner_carries_its_plan_and_no_token(self):
+        """0.46: a confirm-class tool's dry run rides on its card as ``plan``; pins and the approval
+        token stay privileged-only, and the agent registry (no enforcement) never plans."""
+        from nvh.integrations.wizard.tools import WizardToolRegistry
+
+        planner = AsyncMock(return_value={
+            "ok": True, "commands": [], "summary": "local", "pinned_arguments": {"mode": "x"},
+        })
+        handler = AsyncMock(return_value={"ok": True})
+        tool = Tool(
+            name="planned", description="", parameters={}, handler=handler, safety_class="confirm",
+            planner=planner, handler_style="mapping",
+        )
+        wizard = WizardToolRegistry()
+        wizard.register(tool)
+        card = await wizard.execute("planned", {"a": 1})
+        assert card["needs_confirmation"] is True and card["plan"]["summary"] == "local"
+        assert card["arguments"] == {"a": 1}  # a confirm card folds no pins
+        assert "approval_token" not in card and "approval_expires_at" not in card and "privileged" not in card
+        planner.assert_awaited_once_with({"a": 1})
+        assert handler.await_count == 0
+        assert (await wizard.execute("planned", {"a": 1}, confirmed=True)).success is True
+        agent = ToolRegistry(include_system=False, builtins=False)
+        agent.register(tool)
+        assert (await agent.execute("planned", {"a": 1})).success is True
+        assert planner.await_count == 1  # the agent registry asked nobody and planned nothing
+        # A privileged tool without a planner still carries ``plan: None`` (unchanged shape).
+        bare = Tool(name="bare", description="", parameters={}, handler=handler, safety_class="privileged")
+        wizard.register(bare)
+        card = await wizard.execute("bare", {})
+        assert card["privileged"] is True and card["plan"] is None and "approval_token" in card
 
     @pytest.mark.asyncio
     async def test_guardrails_read_the_right_argument_and_redact_text_output(self, tmp_path: Path):

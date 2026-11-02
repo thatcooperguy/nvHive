@@ -1145,3 +1145,131 @@ async def test_provider_health_check_success(name):
             patch("litellm.aresponses", new_callable=AsyncMock, return_value=_litellm_resp()):
         result = await provider.health_check()
     assert isinstance(result, HealthStatus) and result.healthy is True
+
+
+# ---------------------------------------------------------------------------
+# Streamed usage (0.46): stream_options.include_usage when LiteLLM says the
+# route takes it, and the usage-only trailer read onto the final StreamChunk.
+# ---------------------------------------------------------------------------
+
+_SUPPORTED_PARAMS = "nvh.providers.openai_compatible.litellm.get_supported_openai_params"
+
+
+async def _stream_with_trailer(*, usage_on_finish: bool = False, trailer: bool = True):
+    """``hi`` → finish chunk (no usage unless asked) → the usage-only trailer OpenAI sends."""
+    yield SimpleNamespace(
+        choices=[SimpleNamespace(delta=SimpleNamespace(content="hi"), finish_reason=None)],
+    )
+    finish = {"choices": [SimpleNamespace(delta=SimpleNamespace(content=""), finish_reason="stop")]}
+    if usage_on_finish:
+        finish["usage"] = SimpleNamespace(prompt_tokens=11, completion_tokens=2, total_tokens=13)
+    yield SimpleNamespace(**finish)
+    if trailer:
+        yield SimpleNamespace(
+            choices=[], usage=SimpleNamespace(prompt_tokens=7, completion_tokens=3, total_tokens=10),
+        )
+
+
+class TestStreamUsageTrailer:
+    def test_supports_stream_usage_reads_litellm_table_only(self):
+        with patch(_SUPPORTED_PARAMS, return_value=["temperature", "stream_options"]):
+            assert oc.supports_stream_usage("openai/gpt-4o") is True
+        with patch(_SUPPORTED_PARAMS, return_value=["temperature"]):
+            assert oc.supports_stream_usage("openai/gpt-4o") is False
+        with patch(_SUPPORTED_PARAMS, return_value=None):
+            assert oc.supports_stream_usage("openai/gpt-4o") is False
+        with patch(_SUPPORTED_PARAMS, side_effect=Exception("unmapped")):
+            assert oc.supports_stream_usage("openai/gpt-4o") is False
+        assert oc.supports_stream_usage("") is False
+
+    def test_supports_stream_usage_is_the_table_not_a_provider_list(self):
+        """Two routes LiteLLM's own table answers differently today: an OpenAI route takes
+        ``stream_options``; the Anthropic chat route does not. Both read live, no list here."""
+        assert oc.supports_stream_usage("openai/gpt-4o") is True
+        assert oc.supports_stream_usage("anthropic/claude-sonnet-4-5") is False
+
+    @pytest.mark.asyncio
+    async def test_requests_include_usage_and_waits_for_the_trailer(self):
+        p = _spec_provider("openai")
+        with patch(_SUPPORTED_PARAMS, return_value=["stream_options"]), \
+                patch(_ACOMPLETION, new=AsyncMock(return_value=_stream_with_trailer())) as ac:
+            chunks = [c async for c in p.stream([Message(role="user", content="hi")])]
+        assert ac.await_args.kwargs["stream_options"] == {"include_usage": True}
+        assert [c.is_final for c in chunks] == [False, True], "the final chunk is yielded once, last"
+        final = chunks[-1]
+        assert final.usage == Usage(input_tokens=7, output_tokens=3, total_tokens=10)
+        assert final.accumulated_content == "hi"
+        assert final.finish_reason == FinishReason.STOP
+        assert final.cost_usd is not None
+
+    @pytest.mark.asyncio
+    async def test_no_stream_options_when_litellm_says_the_route_lacks_it(self):
+        p = _spec_provider("openai")
+        with patch(_SUPPORTED_PARAMS, return_value=["temperature"]), \
+                patch(_ACOMPLETION, new=AsyncMock(return_value=_stream_with_trailer(trailer=False))) as ac:
+            chunks = [c async for c in p.stream([Message(role="user", content="hi")])]
+        assert "stream_options" not in ac.await_args.kwargs
+        # Today's behaviour, unchanged: the estimate with 0 prompt tokens.
+        assert [c.is_final for c in chunks] == [False, True]
+        assert chunks[-1].usage is not None and chunks[-1].usage.input_tokens == 0
+        assert chunks[-1].usage.output_tokens == p.estimate_tokens("hi")
+
+    @pytest.mark.asyncio
+    async def test_missing_trailer_falls_back_to_the_estimate_at_stream_end(self):
+        p = _spec_provider("openai")
+        with patch(_SUPPORTED_PARAMS, return_value=["stream_options"]), \
+                patch(_ACOMPLETION, new=AsyncMock(return_value=_stream_with_trailer(trailer=False))):
+            chunks = [c async for c in p.stream([Message(role="user", content="hi")])]
+        assert [c.is_final for c in chunks] == [False, True]
+        assert chunks[-1].usage == Usage(
+            input_tokens=0, output_tokens=p.estimate_tokens("hi"), total_tokens=p.estimate_tokens("hi"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_usage_on_the_finish_chunk_wins_and_the_trailer_is_not_a_stray_chunk(self):
+        p = _spec_provider("openai")
+        with patch(_SUPPORTED_PARAMS, return_value=["stream_options"]), \
+                patch(_ACOMPLETION, new=AsyncMock(return_value=_stream_with_trailer(usage_on_finish=True))):
+            chunks = [c async for c in p.stream([Message(role="user", content="hi")])]
+        assert [c.is_final for c in chunks] == [False, True]
+        assert chunks[-1].usage == Usage(input_tokens=11, output_tokens=2, total_tokens=13)
+
+    @pytest.mark.asyncio
+    async def test_a_callers_stream_options_are_left_alone(self):
+        p = _spec_provider("openai")
+        with patch(_SUPPORTED_PARAMS, return_value=["stream_options"]), \
+                patch(_ACOMPLETION, new=AsyncMock(return_value=_stream_with_trailer(trailer=False))) as ac:
+            chunks = [c async for c in p.stream(
+                [Message(role="user", content="hi")], stream_options={"include_usage": False},
+            )]
+        assert ac.await_args.kwargs["stream_options"] == {"include_usage": False}
+        assert [c.is_final for c in chunks] == [False, True]
+        assert chunks[-1].usage is not None and chunks[-1].usage.input_tokens == 0
+
+    @pytest.mark.asyncio
+    async def test_tool_calls_still_arrive_on_the_held_final_chunk(self):
+        async def stream():
+            yield SimpleNamespace(choices=[SimpleNamespace(
+                delta=SimpleNamespace(content="", tool_calls=[SimpleNamespace(
+                    index=0, id="call_1", function=SimpleNamespace(name="f", arguments='{"a":'),
+                )]),
+                finish_reason=None,
+            )])
+            yield SimpleNamespace(choices=[SimpleNamespace(
+                delta=SimpleNamespace(content="", tool_calls=[SimpleNamespace(
+                    index=0, id=None, function=SimpleNamespace(name=None, arguments=" 1}"),
+                )]),
+                finish_reason="tool_calls",
+            )])
+            yield SimpleNamespace(choices=[], usage=SimpleNamespace(prompt_tokens=4, completion_tokens=6, total_tokens=10))
+
+        p = _spec_provider("openai")
+        with patch(_SUPPORTED_PARAMS, return_value=["stream_options"]), \
+                patch(_ACOMPLETION, new=AsyncMock(return_value=stream())):
+            chunks = [c async for c in p.stream([Message(role="user", content="hi")])]
+        assert len(chunks) == 2 and chunks[-1].is_final
+        assert chunks[-1].finish_reason == FinishReason.TOOL_CALLS
+        assert chunks[-1].tool_calls == [
+            {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": '{"a": 1}'}},
+        ]
+        assert chunks[-1].usage == Usage(input_tokens=4, output_tokens=6, total_tokens=10)

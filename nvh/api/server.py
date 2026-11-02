@@ -58,11 +58,15 @@ from nvh.api.deps import (  # re-exported: every `from nvh.api.server import ...
     key_required,
     require_auth,
 )
+from nvh.api.routes import outputs as _outputs_routes
+from nvh.api.routes import schedules as _schedules_routes
+from nvh.api.routes import vault_notes as _vault_notes_routes
 from nvh.api.services import QueryService
 from nvh.core import local_models
 from nvh.core.agents import generate_agents, get_preset_agents, list_presets
 from nvh.core.atohi import ResourcePaused
 from nvh.core.engine import BudgetExceededError, Engine
+from nvh.integrations.services import schedule_runner as _schedule_runner
 from nvh.integrations.wizard.vision_bridge import MAX_IMAGE_BYTES as _VISION_MAX_IMAGE_BYTES
 from nvh.providers.base import (
     CompletionResponse,
@@ -341,10 +345,137 @@ def _start_platform_warmup() -> threading.Thread | None:
     return thread
 
 
+# ---------------------------------------------------------------------------
+# Schedule runner (design 0.46 §6): the API process runs due schedules.
+# ---------------------------------------------------------------------------
+
+_SCHEDULER_STOP_TIMEOUT_S = 5.0
+"""How long shutdown waits for ``run_loop`` to stop on its own before cancelling it.
+
+``run_loop`` returns as soon as its stop event is set unless a run is in
+flight (an unattended Wizard turn can take a while); after this many
+seconds the task is cancelled and the runner marks that run ``error``.
+"""
+
+
+def _scheduler_enabled() -> bool:
+    """``NVH_SCHEDULER`` — unset or ``1`` runs the loop; ``0`` (``false``/``no``/``off``) skips it.
+
+    tests/conftest.py sets ``0`` for every test (and for the subprocesses
+    tests spawn) so no ``TestClient`` lifespan writes ``state/scheduler.lock``;
+    ``run_server`` defaults it to ``0`` in uvicorn's ``--reload`` parent.
+    """
+    return os.environ.get("NVH_SCHEDULER", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _scheduler_poll_s() -> float:
+    """``NVH_SCHEDULER_POLL_S`` in seconds (default ``schedule_runner.DEFAULT_POLL_S``, 60).
+
+    The lock's staleness rule is ``3 × poll_s`` of the holder, so a shorter
+    poll also means a faster takeover after an unclean restart. Anything
+    that is not a finite number above zero falls back to the default with
+    one warning.
+    """
+    raw = os.environ.get("NVH_SCHEDULER_POLL_S", "").strip()
+    if not raw:
+        return _schedule_runner.DEFAULT_POLL_S
+    try:
+        value = float(raw)
+    except ValueError:
+        value = -1.0
+    if not 0 < value < float("inf"):
+        logger.warning(
+            "NVH_SCHEDULER_POLL_S=%r is not a positive number of seconds; using %g",
+            raw, _schedule_runner.DEFAULT_POLL_S,
+        )
+        return _schedule_runner.DEFAULT_POLL_S
+    return value
+
+
+def _log_scheduler_exit(task: asyncio.Task[bool]) -> None:
+    """Done-callback of the runner task: a loop that died or stood down is logged, never silent.
+
+    Retrieving the exception here also keeps asyncio from reporting "Task
+    exception was never retrieved" at garbage-collection time; a cancelled
+    task (shutdown) says nothing.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Schedule runner stopped with an error: %s", exc)
+    elif task.result() is False:
+        logger.info("Schedule runner ended without polling (stopped while waiting for the lock, or stood down)")
+
+
+def _start_scheduler(app: FastAPI) -> asyncio.Task[bool] | None:
+    """Start ``schedule_runner.run_loop`` as a task on the running loop; ``None`` when disabled.
+
+    Called once the engine is ready (a run needs it). The stop event and the
+    task are kept on ``app.state`` (``scheduler_stop`` / ``scheduler_task``)
+    for :func:`_stop_scheduler` and for tests. When another live runner —
+    ``nvh schedule start`` or a second ``nvh serve`` — already holds
+    ``state/scheduler.lock``, the loop waits (``wait_for_lock``): it retries
+    every poll and takes over polling the moment that runner releases the
+    lock, so the API never ends up without a scheduler until a restart.
+    """
+    stop = asyncio.Event()
+    app.state.scheduler_stop = stop
+    app.state.scheduler_task = None
+    if not _scheduler_enabled():
+        logger.info("Schedule runner not started: NVH_SCHEDULER=0 (schedules run from `nvh schedule start`)")
+        return None
+    poll_s = _scheduler_poll_s()
+    task: asyncio.Task[bool] = asyncio.create_task(
+        _schedule_runner.run_loop(
+            stop, poll_s=poll_s, runner=_schedule_runner.RUNNER_API, wait_for_lock=True,
+        ),
+        name="nvh-schedule-runner",
+    )
+    task.add_done_callback(_log_scheduler_exit)
+    app.state.scheduler_task = task
+    logger.info(
+        "Schedule runner task started: polls every %gs under %s (waits while another runner holds it)",
+        poll_s, _schedule_runner.lock_path(),
+    )
+    return task
+
+
+async def _stop_scheduler(app: FastAPI) -> None:
+    """Set the stop event, give the loop :data:`_SCHEDULER_STOP_TIMEOUT_S` to finish, then cancel it.
+
+    ``run_loop`` releases the lock in its ``finally`` on both paths, so the
+    next process to start finds the store free instead of waiting out a
+    stale heartbeat.
+    """
+    stop = getattr(app.state, "scheduler_stop", None)
+    task = getattr(app.state, "scheduler_task", None)
+    if stop is not None:
+        stop.set()
+    if task is None or task.done():
+        return
+    done, _pending = await asyncio.wait({task}, timeout=_SCHEDULER_STOP_TIMEOUT_S)
+    if not done:
+        logger.warning(
+            "Schedule runner still busy %gs after stop; cancelling it", _SCHEDULER_STOP_TIMEOUT_S,
+        )
+        task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        logger.debug("Schedule runner cancelled at shutdown")
+    except Exception as exc:  # the loop's own failure must never fail shutdown
+        logger.warning("Schedule runner ended with an error: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _engine
     boot_task: asyncio.Task[None] | None = None
+    # A previous lifespan in this process (tests) may have left a finished
+    # runner task here; shutdown must only ever stop this lifespan's own.
+    app.state.scheduler_stop = None
+    app.state.scheduler_task = None
     from nvh.utils.logging import setup_logging
     json_mode = os.environ.get("HIVE_LOG_FORMAT", "text") == "json"
     setup_logging(level=os.environ.get("HIVE_LOG_LEVEL", "INFO"), json_format=json_mode)
@@ -371,9 +502,13 @@ async def lifespan(app: FastAPI):
                 asyncio.create_task(refresh_all_tools())
         except Exception as exc:
             logger.debug("mcp cache warm-up skipped: %s", exc)
+        # Schedule runner (0.46): due schedules run inside this process
+        # unless NVH_SCHEDULER=0; one runner per store via the heartbeat lock.
+        _start_scheduler(app)
         yield
     except Exception as exc:
         logger.error("Hive API: engine initialization error: %s", exc)
+        logger.info("Schedule runner not started: the engine did not initialize")
         boot_task = asyncio.create_task(_run_boot_preflight_on_startup(app))
         # Don't crash — partial init is fine; requests will fail gracefully.
         yield
@@ -383,6 +518,9 @@ async def lifespan(app: FastAPI):
         if boot_task and not boot_task.done():
             boot_task.cancel()
         logger.info("Hive API: shutting down.")
+        # Stop the schedule runner before the DB closes: a run in flight
+        # still has to record its outcome (mark_run) on the way out.
+        await _stop_scheduler(app)
         if _engine:
             if hasattr(_engine, 'webhooks') and _engine.webhooks:
                 await _engine.webhooks.stop()
@@ -1445,6 +1583,14 @@ async def vault_memory_endpoint(
     (``ValueError("nothing to remember after redacting secrets")``); that is
     a client-input condition and comes back as a 400 with the writer's own
     words, the text the REPL prints — not as a 500 with a server traceback.
+
+    0.46 §2: after the write the note alone is indexed into the RAG
+    ``vault`` collection, best effort; ``indexed`` says whether it is
+    answerable through ``rag_ask_vault`` yet. The save never waits on more
+    than that one call and never fails because of it (no embedder, Ollama
+    unreachable, a failed ingest — all ``false``). The record fields the
+    writer returns (``id``, ``schema``, ``source``, ``redacted``, ...) pass
+    through unchanged.
     """
     from nvh.integrations.workspace.vault import append_vault_memory
 
@@ -1459,7 +1605,23 @@ async def vault_memory_endpoint(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return _response_envelope(note)
+    indexed = False
+    # The engine's admission (its Atohi broker, when one is bound) — the same
+    # object every other RAG route and the Wizard's ``remember`` hand the
+    # embedder, so an Atohi-managed box indexes this note like the others
+    # instead of building a brokerless policy that can never be admitted.
+    admission = getattr(getattr(_engine, "registry", None), "admission", None)
+    try:
+        from nvh.integrations.rag import index_vault_note
+
+        indexed = bool(await index_vault_note(
+            FilePath(note["path"]), home_dir=request.home_dir, admission=admission,
+        ))
+    except ResourcePaused as exc:  # a BaseException: the GPU is paused, the save stands, no index yet
+        logger.info("vault memory: index deferred, resource paused (%s)", exc)
+    except Exception as exc:  # the index is derived; the save stands
+        logger.debug("vault memory: index_vault_note failed: %s", exc)
+    return _response_envelope({**note, "indexed": indexed})
 
 
 @app.post("/v1/vault/obsidian/install", summary="Install Obsidian rootlessly")
@@ -2162,10 +2324,23 @@ async def wizard_profiles_list(
 
     Built-in profiles always appear first; user-defined profiles follow.
     A user can override a built-in by saving a profile with the same name.
+
+    Each row is ``AgentProfile.to_dict()`` — since 0.46 that carries
+    ``starter``, the on-persona prompt the empty state seeds the composer
+    with — plus ``accent`` and ``background``: the core built-in avatar
+    spec's two colours (``nvh.integrations.wizard.avatars``), ``""`` for a
+    user profile, whose avatar is a file or URL with no colour on record.
     """
+    from nvh.integrations.wizard.avatars import _BUILT_IN_AVATARS
     from nvh.integrations.wizard.profiles import list_profiles
 
-    profiles = [p.to_dict() for p in list_profiles(home_dir=home_dir)]
+    profiles: list[dict[str, Any]] = []
+    for profile in list_profiles(home_dir=home_dir):
+        row = profile.to_dict()
+        spec = _BUILT_IN_AVATARS.get(profile.name)
+        row["background"] = spec[0] if spec else ""
+        row["accent"] = spec[1] if spec else ""
+        profiles.append(row)
     return _response_envelope({"profiles": profiles})
 
 
@@ -2181,6 +2356,8 @@ class WizardProfileUpsertRequest(BaseModel):
     max_tokens: int | None = None
     tools_allowed: list[str] | None = None
     tags: list[str] = Field(default_factory=list)
+    # The empty-state starter prompt (``AgentProfile.starter``, 0.46); "" = none.
+    starter: str = Field(default="", max_length=400)
     home_dir: str | None = None
 
 
@@ -2208,6 +2385,7 @@ async def wizard_profiles_upsert(
         max_tokens=request.max_tokens,
         tools_allowed=request.tools_allowed,
         tags=request.tags,
+        starter=request.starter,
     )
     path = save_user_profile(profile, home_dir=request.home_dir)
     return _response_envelope({"saved": True, "path": str(path), "name": profile.name})
@@ -2256,19 +2434,23 @@ class WizardProfileAvatarGenerateRequest(BaseModel):
 
 @app.post(
     "/v1/wizard/profiles/{name}/avatar/generate",
-    summary="Generate a portrait for a user profile via ComfyUI",
+    summary="Generate a portrait for a user profile (NVIDIA-hosted or local ComfyUI)",
 )
 async def wizard_profile_avatar_generate(
     name: str = Path(..., description="Profile name"),
     request: WizardProfileAvatarGenerateRequest = None,  # type: ignore[assignment]
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
-    """Render a portrait via the local ComfyUI service and save it as the
+    """Render a portrait through the image backend and save it as the
     profile's avatar. Returns the saved path + a URL the UI can render.
 
     This is the "create a new agent and pick a portrait" flow's image side.
-    When ComfyUI isn't installed, returns ok=False with a clear hint so the
-    user can install it from the Studio Packs page.
+    The backend is the one :func:`nvh.integrations.imagegen.plan_image_backend`
+    picks (``NVAPI_KEY`` → NVIDIA-hosted, else the ComfyUI nvHive recorded
+    when it started it, else none); the plan is computed first so a failure
+    names the backend that ran — ``Image generation failed (<backend>): …``
+    — instead of blaming ComfyUI for every error. With no backend the
+    envelope is ``ok=False`` with the shim's four-bullet hint.
     """
     from nvh.integrations.wizard.profiles import (
         avatars_dir,
@@ -2300,6 +2482,19 @@ async def wizard_profile_avatar_generate(
                     "PNG to NVH_HOME/agent-profiles/avatars/<name>.png manually.",
         })
 
+    # The plan the shim will follow, computed first so the error path can name
+    # the backend that ran. Off the loop: the ComfyUI probe is a blocking GET.
+    backend: str | None = None
+    plan_summary = ""
+    try:
+        from nvh.integrations.imagegen import plan_image_backend
+
+        plan = await asyncio.to_thread(plan_image_backend, home_dir=request.home_dir)
+        backend = plan.get("backend") or None
+        plan_summary = str(plan.get("summary") or "")
+    except Exception as exc:
+        logger.debug("avatar/generate: plan_image_backend failed: %s", exc)
+
     try:
         # generate_portrait returns the raw image bytes on success or raises.
         image_bytes, ext = await generate_portrait(
@@ -2309,7 +2504,9 @@ async def wizard_profile_avatar_generate(
     except Exception as exc:
         return _response_envelope({
             "ok": False,
-            "error": f"ComfyUI portrait generation failed: {exc}",
+            "error": f"Image generation failed ({backend or 'none'}): {exc}",
+            "backend": backend,
+            "plan": plan_summary,
         })
 
     out_dir = avatars_dir(home_dir=request.home_dir)
@@ -2321,6 +2518,8 @@ async def wizard_profile_avatar_generate(
         "path": str(out_path),
         "url": f"/v1/wizard/profiles/{name}/avatar",
         "prompt": derived_prompt,
+        "backend": backend,
+        "plan": plan_summary,
     })
 
 
@@ -3608,8 +3807,157 @@ async def list_models(provider: str | None = None, _auth: None = Depends(require
 
 # -- /v1/budget/status --------------------------------------------------------
 
+def _pairs_cost_known(pairs: list[tuple[str, str]]) -> bool:
+    """Whether every ``(model, provider)`` pair has a price the catalog vouches for.
+
+    Per pair it is :func:`_catalog_cost_known` with no ``cost_usd`` — the
+    catalog row, a ``zero_cost`` provider's $0 or LiteLLM's own table, never
+    "the sum is non-zero" (a pair's share of the sum is not known here). No
+    pairs — nothing was called — reads as known: a $0 nobody spent is a price.
+    """
+    return all(_catalog_cost_known(model, provider, None, metered=True) for model, provider in pairs)
+
+
+def _pairs_local_only(pairs: list[tuple[str, str]]) -> bool:
+    """Whether every pair's provider is local by the catalog's own verdict.
+
+    ``PROVIDER_FACTS[provider].is_local`` (Ollama, Triton), never "the spend is
+    zero": an unpriced cloud model logs ``cost_usd`` 0 too (``QueryLog`` has no
+    ``cost_known`` column), so a zero-sum rule would say "local only" while
+    cloud calls happened. Vacuously true with no pairs — no cloud call happened.
+    """
+    for _model, provider in pairs:
+        spec = PROVIDER_FACTS.get(provider)
+        if spec is None or not spec.is_local:
+            return False
+    return True
+
+
+def _start_of_utc_day() -> datetime:
+    """The cut ``repository.get_spend("daily")`` uses, so ``daily_cost_known`` judges the same rows."""
+    return datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+async def _spend_by_provider_since(since: datetime) -> dict[str, Decimal]:
+    """Successful-row spend per provider at or after ``since`` (the session block's breakdown).
+
+    The ``since``-cut sibling of ``repository.get_spend_by_provider(period)``;
+    same ``status == "success"`` rule as ``get_spend_since``.
+    """
+    from sqlalchemy import func as _fn
+    from sqlalchemy import select as _sel
+
+    from nvh.storage.models import QueryLog
+    from nvh.storage.repository import get_session
+
+    start = since if since.tzinfo is not None else since.replace(tzinfo=UTC)
+    async with get_session() as session:
+        rows = (await session.execute(
+            _sel(QueryLog.provider, _fn.coalesce(_fn.sum(QueryLog.cost_usd), 0))
+            .where(QueryLog.created_at >= start, QueryLog.status == "success")
+            .group_by(QueryLog.provider)
+        )).all()
+    return {str(row[0] or ""): Decimal(str(row[1])) for row in rows}
+
+
+#: The smallest ``since`` accepted as epoch milliseconds: 10^12 ms is 2001-09-09T01:46:40Z. Anything
+#: below it is almost surely epoch *seconds* (1.7 × 10^9 today) and would read as a 1970 instant.
+_SINCE_FLOOR_MS = 10**12
+
+
+async def _session_spend(since_ms: int) -> dict[str, Any]:
+    """The ``session`` block of ``GET /v1/budget/status?since=``: the ledger since one instant.
+
+    Machine-wide — CLI, WebUI, proxy clients and scheduled runs all land in the
+    one ledger — so a client must not present it as "what this tab sent".
+    ``cost_known`` and ``local_only`` are catalog verdicts over every
+    ``(model, provider)`` pair that answered since ``since`` (any status: a
+    cloud call that failed still happened); ``spend_usd`` sums successful rows.
+    """
+    from nvh.storage import repository as repo
+
+    if since_ms < _SINCE_FLOOR_MS:
+        # Epoch seconds (the common slip) land in 1970; a tab cannot have been
+        # open since before the ledger could exist, so refuse rather than sum
+        # the whole ledger as one "session".
+        raise HTTPException(
+            status_code=422,
+            detail="since must be epoch milliseconds (a value this small reads as seconds)",
+        )
+    try:
+        since = datetime.fromtimestamp(since_ms / 1000, tz=UTC)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="since must be epoch milliseconds") from exc
+    try:
+        spend = await repo.get_spend_since(since)
+        pairs = await repo.distinct_models_since(since)
+        by_provider = await _spend_by_provider_since(since)
+    except Exception as exc:
+        logger.warning("Session spend unavailable; returning local fallback: %s", exc)
+        return {
+            "since": since_ms,
+            "spend_usd": "0",
+            "cost_known": False,
+            "local_only": False,
+            "by_provider": {},
+            "unavailable": True,
+        }
+    return {
+        "since": since_ms,
+        "spend_usd": str(spend),
+        "cost_known": _pairs_cost_known(pairs),
+        "local_only": _pairs_local_only(pairs),
+        "by_provider": {name: str(value) for name, value in by_provider.items()},
+        "unavailable": False,
+    }
+
+
+def _platform_block() -> dict[str, Any] | None:
+    """The platform facts the session pill reads, from the warmed cache (never a host probe
+    on the request path — ``detect_platform_facts`` builds from local signals when cold);
+    ``None`` only if detection itself failed."""
+    try:
+        from nvh.utils.platform_facts import detect_platform_facts
+
+        facts = detect_platform_facts()
+    except Exception as exc:
+        logger.debug("platform facts unavailable for /v1/budget/status: %s", exc)
+        return None
+    return {
+        "device_class": facts.device_class,
+        "device_label": facts.device_label,
+        "is_cloud": bool(facts.is_cloud),
+        "cloud_provider": facts.cloud_provider,
+        "is_owned": bool(facts.is_owned),
+    }
+
+
 @app.get("/v1/budget/status", summary="Current budget usage and limits")
-async def budget_status(_auth: None = Depends(require_auth)) -> dict[str, Any]:
+async def budget_status(
+    since: int | None = Query(
+        None,
+        ge=0,
+        description="Epoch milliseconds; adds the `session` block (spend, cost verdict and provider mix since that instant)",
+    ),
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Daily and monthly spend against the limits, plus what the session cost pill reads (0.46 §7).
+
+    - ``hourly_rate_usd``: ``budget.hourly_rate_usd`` as a string, ``null`` when
+      unset — the owner's figure, never guessed (``nvh config set
+      budget.hourly_rate_usd 2.10``).
+    - ``daily_cost_known``: the catalog's verdict on every ``(model, provider)``
+      pair that answered today (the same UTC-day cut as ``daily_spend``).
+    - ``session`` (only with ``since``): ``{since, spend_usd, cost_known,
+      local_only, by_provider, unavailable}`` — see :func:`_session_spend`;
+      ``null`` without ``since``.
+    - ``platform``: ``{device_class, device_label, is_cloud, cloud_provider,
+      is_owned}`` from the warmed platform facts — cheap, unlike
+      ``/v1/wizard/context``, which runs the full snapshot probe and must not be
+      polled by a pill on every page.
+    """
+    from nvh.storage import repository as repo
+
     engine = get_engine()
     try:
         await engine.initialize()
@@ -3628,6 +3976,13 @@ async def budget_status(_auth: None = Depends(require_auth)) -> dict[str, Any]:
             "error": str(exc)[:200],
         }
 
+    rate = getattr(getattr(engine.config, "budget", None), "hourly_rate_usd", None)
+    try:
+        daily_cost_known = _pairs_cost_known(await repo.distinct_models_since(_start_of_utc_day()))
+    except Exception as exc:
+        logger.debug("daily cost verdict unavailable: %s", exc)
+        daily_cost_known = False
+
     # Serialize Decimal values
     serialized = {
         "daily_spend": str(data.get("daily_spend", "0")),
@@ -3638,6 +3993,10 @@ async def budget_status(_auth: None = Depends(require_auth)) -> dict[str, Any]:
         "monthly_queries": data.get("monthly_queries", 0),
         "by_provider": {k: str(v) for k, v in (data.get("by_provider") or {}).items()},
         "unavailable": bool(data.get("unavailable", False)),
+        "hourly_rate_usd": str(rate) if rate is not None else None,
+        "daily_cost_known": daily_cost_known,
+        "session": await _session_spend(since) if since is not None else None,
+        "platform": _platform_block(),
     }
     return _response_envelope(serialized)
 
@@ -4711,13 +5070,26 @@ async def setup_jobs(
     kind: str | None = None,
     status_filter: str | None = None,
     limit: int = 20,
+    exclude_kind: str | None = Query(None, description="Drop jobs of this kind (the Setup page passes `schedule-run`)"),
+    schedule_id: str | None = Query(None, description="Only the runs of this schedule (`request.schedule_id`)"),
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
-    """Return recent rootless install jobs persisted under NVH_HOME."""
+    """Return recent rootless install jobs persisted under NVH_HOME.
+
+    ``exclude_kind`` / ``schedule_id`` (0.46 §6) reach ``list_jobs`` only when
+    given — the filters apply before ``limit`` there — so the Setup page keeps
+    its kind-less list free of schedule runs and the Schedules page reads one
+    schedule's history.
+    """
     from nvh.integrations.services.jobs import list_jobs
 
     safe_limit = max(1, min(limit, 100))
-    jobs = list_jobs(kind=kind, status=status_filter, limit=safe_limit)
+    extra: dict[str, Any] = {}
+    if exclude_kind:
+        extra["exclude_kind"] = exclude_kind
+    if schedule_id:
+        extra["schedule_id"] = schedule_id
+    jobs = list_jobs(kind=kind, status=status_filter, limit=safe_limit, **extra)
     return _response_envelope({"jobs": jobs, "count": len(jobs)})
 
 
@@ -5482,6 +5854,19 @@ def run_server(host: str = "127.0.0.1", port: int = 8000, reload: bool = False) 
     # models probe carries its key there (``?key=``), so the logger stays at
     # WARNING whatever uvicorn's log level is.
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    if reload:
+        # With ``reload=True`` this process is uvicorn's reloader parent: it
+        # never runs the lifespan itself, and the worker it spawns — and
+        # re-spawns on every saved file — inherits this environment. A
+        # runner inside a worker that is killed on each reload would leave
+        # in-flight runs marked interrupted and its lock to age out, so dev
+        # mode runs no scheduler unless the operator sets NVH_SCHEDULER=1
+        # explicitly (setdefault: an explicit value wins). `nvh schedule
+        # start` in another terminal is the runner for a --reload session.
+        os.environ.setdefault("NVH_SCHEDULER", "0")
+        logger.info(
+            "--reload: schedule runner off in the dev server (NVH_SCHEDULER=%s)", os.environ["NVH_SCHEDULER"],
+        )
 
     uvicorn.run(
         "nvh.api.server:app",
@@ -5881,9 +6266,43 @@ async def get_setup_status(_auth: None = Depends(require_auth)):
 # and NVHive will handle routing, fallback, and cost optimisation transparently.
 # ---------------------------------------------------------------------------
 
+_HISTORY_HEADER = "x-nvhive-history"
+
+
+def _proxy_prompt_and_history(
+    messages: list[dict[str, Any]], *, flatten: bool,
+) -> tuple[str, str | None, list[Message] | None]:
+    """``(prompt, system_prompt, history)`` for the shared chat-completions handler.
+
+    Default (0.46 §5, O12): the last user message is the prompt and every
+    earlier turn — assistant ``tool_calls`` and ``tool`` results included — is
+    forwarded as ``Engine.query(history=...)``, the shape the model expects
+    (:func:`nvh.api.proxy.openai_messages_to_nvhive_history`). ``flatten``
+    (the ``x-nvhive-history: flatten`` header) restores the pre-0.46 single
+    ``User:``/``Assistant:`` string with no history. A transcript with no
+    trailing user turn (an agent loop posting tool results back) is flattened
+    too: the engine answers a user message, and the old rendering is the one
+    every caller already handled.
+    """
+    from nvh.api.proxy import openai_messages_to_nvhive, openai_messages_to_nvhive_history
+
+    if not flatten:
+        prompt, system_prompt, history = openai_messages_to_nvhive_history(messages)
+        if prompt or not history:
+            return prompt, system_prompt, (history or None)
+    prompt, system_prompt = openai_messages_to_nvhive(messages)
+    return prompt, system_prompt, None
+
+
 class _ProxyChatMessage(BaseModel):
     role: str
-    content: Any  # str or list[dict] for vision
+    content: Any = None  # str, list[dict] for vision, or null beside tool_calls
+    # Tool-protocol fields (0.46 §5), kept so a transcript carrying an
+    # assistant's ``tool_calls`` and the ``tool`` results that answer them is
+    # forwarded as history instead of silently dropped by the model.
+    name: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None
 
 
 class _ProxyChatRequest(BaseModel):
@@ -5892,6 +6311,14 @@ class _ProxyChatRequest(BaseModel):
     stream: bool = False
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, gt=0)
+    # Function calling (0.46 §5): forwarded to the provider that answers; the
+    # reply carries ``message.tool_calls`` / one ``delta.tool_calls`` chunk.
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: str | dict[str, Any] | None = None
+    # ``stream_options.include_usage`` adds the usage-only chunk before [DONE].
+    stream_options: dict[str, Any] | None = None
+    # Accepted and not forwarded: nvHive does not enforce an output schema.
+    response_format: dict[str, Any] | None = None
     # Legacy / passthrough fields — accepted but not forwarded
     top_p: float | None = None
     frequency_penalty: float | None = None
@@ -5937,6 +6364,18 @@ async def proxy_chat_completions(
 
     NemoClaw integration:
     - Set ``x-nvhive-privacy: local-only`` header to force local routing.
+
+    History and tools (0.46 §5, O12): a multi-turn transcript is forwarded
+    as history (the last user message is the prompt; ``system`` messages join
+    the system prompt; assistant ``tool_calls`` and ``tool`` results keep
+    their fields), not flattened into one string — ``x-nvhive-history:
+    flatten`` restores the pre-0.46 rendering. ``tools`` / ``tool_choice``
+    reach the provider; a reply with native calls carries ``message.tool_calls``
+    and ``finish_reason: "tool_calls"`` (a stream: one ``delta.tool_calls``
+    chunk before the finish chunk), and ``stream_options.include_usage`` adds
+    the usage-only chunk before ``[DONE]``. ``response_format`` is accepted
+    and not enforced. Council and throwdown take one prompt, so they see a
+    multi-turn transcript flattened as before.
     """
     from nvh.api.proxy import (
         format_openai_response,
@@ -5949,12 +6388,21 @@ async def proxy_chat_completions(
 
     engine = get_engine()
 
-    # Convert messages list to plain dicts for the helper
-    messages_dicts = [{"role": m.role, "content": m.content} for m in request.messages]
-    prompt, system_prompt = openai_messages_to_nvhive(messages_dicts)
+    # Plain dicts for the helpers; ``exclude_none`` keeps ``name`` /
+    # ``tool_calls`` / ``tool_call_id`` only where the client sent them.
+    messages_dicts = [m.model_dump(exclude_none=True) for m in request.messages]
+    flatten = raw_request.headers.get(_HISTORY_HEADER, "").strip().lower() == "flatten"
+    prompt, system_prompt, history = _proxy_prompt_and_history(messages_dicts, flatten=flatten)
 
     if not prompt:
         raise HTTPException(status_code=400, detail="No user message content found.")
+
+    # Council and throwdown take one prompt string (no history parameter), so
+    # a multi-turn transcript reaches them flattened, exactly as before 0.46.
+    if history:
+        council_prompt, council_system = openai_messages_to_nvhive(messages_dicts)
+    else:
+        council_prompt, council_system = prompt, system_prompt
 
     # --- Privacy header (NemoClaw integration) ---
     # x-nvhive-privacy: local-only forces all routing through Ollama
@@ -5976,8 +6424,8 @@ async def proxy_chat_completions(
             return StreamingResponse(
                 council_stream_generator(
                     engine=engine,
-                    prompt=prompt,
-                    system_prompt=system_prompt,
+                    prompt=council_prompt,
+                    system_prompt=council_system,
                     temperature=request.temperature,
                     max_tokens=request.max_tokens,
                     council_size=council_size,
@@ -5995,8 +6443,8 @@ async def proxy_chat_completions(
 
         try:
             result = await engine.run_council(
-                prompt=prompt,
-                system_prompt=system_prompt,
+                prompt=council_prompt,
+                system_prompt=council_system,
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
                 num_agents=council_size,
@@ -6040,8 +6488,8 @@ async def proxy_chat_completions(
             return StreamingResponse(
                 throwdown_stream_generator(
                     engine=engine,
-                    prompt=prompt,
-                    system_prompt=system_prompt,
+                    prompt=council_prompt,
+                    system_prompt=council_system,
                     temperature=request.temperature,
                     max_tokens=request.max_tokens,
                 ),
@@ -6057,8 +6505,8 @@ async def proxy_chat_completions(
 
         try:
             result = await engine.run_council(
-                prompt=prompt,
-                system_prompt=system_prompt,
+                prompt=council_prompt,
+                system_prompt=council_system,
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
                 auto_agents=True,
@@ -6105,6 +6553,10 @@ async def proxy_chat_completions(
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
                 requested_model=request.model,
+                history=history,
+                tools=request.tools,
+                tool_choice=request.tool_choice,
+                include_usage=bool((request.stream_options or {}).get("include_usage")),
             ),
             media_type="text/event-stream",
             headers={
@@ -6128,6 +6580,9 @@ async def proxy_chat_completions(
             temperature=request.temperature,
             max_tokens=request.max_tokens,
             stream=False,
+            history=history,
+            tools=request.tools,
+            tool_choice=request.tool_choice,
         )
     except ProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -6135,7 +6590,6 @@ async def proxy_chat_completions(
         logger.error("proxy_chat_completions error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
 
-    from nvh.api.proxy import format_openai_response
     return format_openai_response(
         content=resp.content,
         model=resp.model or request.model,
@@ -6143,6 +6597,7 @@ async def proxy_chat_completions(
         prompt_tokens=resp.usage.input_tokens if resp.usage else 0,
         completion_tokens=resp.usage.output_tokens if resp.usage else 0,
         finish_reason=resp.finish_reason.value if resp.finish_reason else "stop",
+        tool_calls=getattr(resp, "tool_calls", None) or None,
     )
 
 
@@ -6272,6 +6727,11 @@ async def proxy_health():
             "throwdown_analysis": True,
             "privacy_header": True,
             "streaming": True,
+            # 0.46 §5: /v1/chat/completions + /v1/completions aliases, native
+            # tool calls round-trip, multi-turn history forwarded by default.
+            "standard_paths": True,
+            "tools": True,
+            "history": True,
         },
     }
 
@@ -6472,6 +6932,22 @@ app.add_api_route(
     summary="Anthropic Messages API proxy (SDK base-URL path)",
     tags=["anthropic-proxy"],
 )
+
+# ---------------------------------------------------------------------------
+# Routers  (nvh/api/routes/*, one module per surface; 0.46)
+# ---------------------------------------------------------------------------
+# Every route in these routers takes ``require_auth`` from ``nvh.api.deps``
+# itself, so mounting one here changes nothing about who may call it.
+# ``outputs``: GET /v1/outputs/images/{scope}/{filename} (generated images).
+# ``vault_notes``: GET /v1/vault/notes, GET/DELETE /v1/vault/notes/{id}.
+# ``schedules``: the seven /v1/schedules routes (list with the runner's lock
+# status and unattended tool roster, create, read, patch, delete, run now,
+# run log); the loop that runs them is the lifespan's ``_start_scheduler``.
+# ---------------------------------------------------------------------------
+
+app.include_router(_outputs_routes.router)
+app.include_router(_vault_notes_routes.router)
+app.include_router(_schedules_routes.router)
 
 
 # ---------------------------------------------------------------------------

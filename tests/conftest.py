@@ -26,6 +26,20 @@ os.environ.setdefault("NVH_LEGACY_MIGRATION", "0")
 # map instead so a run never depends on raw.githubusercontent.com.
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
+# The API lifespan starts the schedule runner (nvh/integrations/services/
+# schedule_runner.run_loop) unless NVH_SCHEDULER=0. Off at import so the
+# subprocesses tests spawn (tests/test_live_api.py's real uvicorn) inherit it
+# too; the autouse ``_no_schedule_runner`` fixture below pins it per test.
+os.environ.setdefault("NVH_SCHEDULER", "0")
+
+# The RAG embedder pulls its Ollama model on a 404 unless NVH_RAG_AUTO_PULL=0
+# (nvh/integrations/rag/embedder.py). Any route or tool that indexes a note
+# for real — ``POST /v1/vault/memory`` since 0.46 — would otherwise be one
+# unpatched test away from a model download on a box with Ollama up; tests
+# that want the pull set the variable themselves. setdefault so an operator's
+# explicit choice still wins.
+os.environ.setdefault("NVH_RAG_AUTO_PULL", "0")
+
 import nvh.storage.repository as repo  # noqa: E402
 from nvh.utils import platform_facts as _platform_facts  # noqa: E402
 
@@ -106,6 +120,22 @@ def _hermetic_home(request, tmp_path_factory):
     finally:
         mp.undo()
         _settings.reset_default_paths()
+
+
+@pytest.fixture(autouse=True)
+def _no_schedule_runner(monkeypatch):
+    """No test starts the schedule runner by accident: ``NVH_SCHEDULER=0``.
+
+    The API lifespan reads the variable and skips the ``run_loop`` task when
+    it is ``0``, so every ``with TestClient(app)`` suite starts no poll loop
+    and writes no ``state/scheduler.lock`` into the hermetic home (a loop
+    left running would also keep the loop's thread alive across tests in the
+    one-process CI run). The one lifespan test that exercises the runner sets
+    ``NVH_SCHEDULER=1`` itself — a test's own ``monkeypatch.setenv`` runs
+    after this fixture and wins — and patches ``run_loop``.
+    """
+    monkeypatch.setenv("NVH_SCHEDULER", "0")
+    yield
 
 
 @pytest.fixture(autouse=True)

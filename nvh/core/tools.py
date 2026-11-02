@@ -584,12 +584,15 @@ class Tool:
             change). ``safe=False`` on construction means ``confirm``.
         summary_template: User-facing one-liner formatted with the arguments
             for the confirmation card.
-        planner: Optional dry run with the handler's signature. For
-            ``privileged`` tools ``execute()`` calls it on the unconfirmed
-            path and puts its answer on the card as ``plan``. A plan may carry
+        planner: Optional dry run with the handler's signature. ``execute()``
+            calls it on the unconfirmed path of any tool that has one —
+            ``privileged`` or ``confirm`` — and puts its answer on the card
+            as ``plan``. For ``privileged`` tools only, a plan may carry
             ``pinned_arguments`` (a dict): ``execute()`` folds them into the
             card's ``arguments`` before minting the approval token, so what
-            the card showed is what the confirmed call must bring back.
+            the card showed is what the confirmed call must bring back. A
+            ``confirm`` card shows its plan and nothing more: no pins are
+            folded in and no token is minted.
     """
 
     name: str
@@ -899,7 +902,9 @@ class ToolRegistry:
         - ``confirm`` tools: with ``enforce_confirmation`` on they require
           ``confirmed=True`` and otherwise return the "I need a confirmation"
           card so the UI can render the button; with it off (the agent
-          registry) the caller has already asked and they run.
+          registry) the caller has already asked and they run. A confirm
+          tool with a planner carries its dry run on that card as ``plan``
+          (informational: no pins, no token).
         - ``privileged`` tools: refused (``disabled=True``) whenever the kill
           switch is off, confirmed or not. Unconfirmed, the card plus
           ``privileged=True``, ``plan`` (the tool's dry run, or ``None``
@@ -960,6 +965,13 @@ class ToolRegistry:
                     arguments = {**arguments, **pinned}
                     card["arguments"] = arguments
                 card.update(issue_approval(name, arguments))
+            elif tool.planner is not None:
+                # A confirm-class tool with a dry run shows it on its card too
+                # (0.46: ``generate_image``'s backend / cost verdict). The plan
+                # is informational here — no pins are folded into the
+                # arguments and no approval token is minted; the click is
+                # ``confirmed=True``, as for every confirm tool.
+                card["plan"] = await self.plan(name, arguments)
             return card
 
         if privileged and not verify_approval(name, arguments, approval_token):
@@ -1533,7 +1545,15 @@ def register_builtin_tools(registry: ToolRegistry) -> None:
         )
 
     async def imagine(prompt: str, provider: str = "auto", size: str = "1024x1024") -> str:
-        """Generate an image from a text prompt using AI image generation."""
+        """Generate an image from a text prompt using AI image generation.
+
+        Confirm-class since 0.46 (O3): the hosted providers bill the user's
+        key, so ``nvh do`` and the REPL's ``/do`` ask first (their
+        ``confirm_unsafe`` prompt), while the agent loops that have no
+        confirmation channel — a ``mode: do`` schedule under
+        ``nvh schedule start`` and ``/v1/smart`` — refuse it with
+        ``Tool requires approval: imagine`` instead of spending unattended.
+        """
         from nvh.core.image_gen import generate_image
         output_path = await generate_image(prompt=prompt, provider=provider, size=size)
         return f"Image generated and saved to: {output_path}"
@@ -1686,4 +1706,6 @@ def register_builtin_tools(registry: ToolRegistry) -> None:
             "required": ["prompt"],
         },
         handler=imagine,
+        safety_class="confirm",
+        summary_template="Generate an image: {prompt}",
     ))

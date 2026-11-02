@@ -747,3 +747,60 @@ class TestAgenticModuleSurface:
         assert r.total_cost_usd == Decimal("0")
         assert r.tier == AgentTier.TIER_0
         assert r.quality_gate_passed is None
+
+
+class TestImagineNeedsApproval:
+    """O3 (0.46): ``imagine`` is confirm-class — the agent loop refuses it without a confirm
+    callback (what ``/v1/smart`` runs with), runs it only when the callback approves, and never
+    bills a key on its own."""
+
+    @staticmethod
+    def _engine():
+        from nvh.providers.registry import ProviderRegistry
+
+        engine = AsyncMock()
+        engine.registry = ProviderRegistry().scoped(CouncilConfig())
+        engine.query = AsyncMock(side_effect=[
+            SimpleNamespace(
+                content='TOOL_CALL: {"name": "imagine", "arguments": {"prompt": "a hero image"}}',
+                cost_usd=None, tool_calls=None,
+            ),
+            SimpleNamespace(content="Waiting for your approval.", cost_usd=None, tool_calls=None),
+        ])
+        return engine
+
+    @pytest.mark.asyncio
+    async def test_agent_loop_refuses_imagine_without_confirm_unsafe(self):
+        from nvh.core.agent_loop import run_agent_loop
+        from nvh.core.tools import ToolRegistry
+
+        generate = AsyncMock(return_value="/nowhere/hero.png")
+        with patch("nvh.core.image_gen.generate_image", generate):
+            result = await run_agent_loop(
+                "make me a hero image", self._engine(), tools=ToolRegistry(include_system=False), max_iterations=3,
+            )
+        assert result.completed is True and result.total_tool_calls == 0
+        [refused] = result.steps[0].tool_results
+        assert refused.success is False and refused.error == "Tool requires approval: imagine"
+        generate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_agent_loop_runs_imagine_when_the_caller_approves(self):
+        from nvh.core.agent_loop import run_agent_loop
+        from nvh.core.tools import ToolRegistry
+
+        asked: list[tuple[str, dict]] = []
+
+        def approve(name, args):
+            asked.append((name, args))
+            return True
+
+        generate = AsyncMock(return_value="/nowhere/hero.png")
+        with patch("nvh.core.image_gen.generate_image", generate):
+            result = await run_agent_loop(
+                "make me a hero image", self._engine(), tools=ToolRegistry(include_system=False),
+                max_iterations=3, confirm_unsafe=approve,
+            )
+        assert asked == [("imagine", {"prompt": "a hero image"})]
+        assert result.total_tool_calls == 1 and result.steps[0].tool_results[0].success is True
+        generate.assert_awaited_once_with(prompt="a hero image", provider="auto", size="1024x1024")

@@ -102,6 +102,11 @@ class AgentProfile:
     # the message; ``nvh ask --template <profile> --var k=v`` supplies more.
     # Replaces the pre-0.42 ~/.council/templates system.
     prompt_template: str = ""
+    # The on-persona starter prompt the WebUI's empty state seeds the composer
+    # with when this agent is picked (0.46: moved here from the web's
+    # hand-typed AGENT_STARTERS map so every client reads one source). Empty
+    # = no starter card.
+    starter: str = ""
 
     def __post_init__(self) -> None:
         # Every construction path (core built-ins, the packaged library JSON,
@@ -144,6 +149,7 @@ BUILT_IN_PROFILES: tuple[AgentProfile, ...] = (
         built_in=True,
         tags=["general", "setup", "support"],
         avatar=_avatar_url_for("wizard"),
+        starter="What can my GPU run right now, and what should I fix first?",
     ),
     AgentProfile(
         name="coder",
@@ -164,6 +170,7 @@ BUILT_IN_PROFILES: tuple[AgentProfile, ...] = (
         built_in=True,
         tags=["code", "review"],
         avatar=_avatar_url_for("coder"),
+        starter="Review the diff in my current branch — call out the riskiest change.",
     ),
     AgentProfile(
         name="researcher",
@@ -184,6 +191,7 @@ BUILT_IN_PROFILES: tuple[AgentProfile, ...] = (
         built_in=True,
         tags=["research", "search"],
         avatar=_avatar_url_for("researcher"),
+        starter="Summarize the latest on Llama 4 release vs Llama 3, with sources.",
         # Researcher routes to whatever the router picks (often a stronger
         # cloud model). 5¢ keeps deep-dives bounded for hourly-metered users.
         max_cost_usd_per_turn=0.05,
@@ -205,6 +213,7 @@ BUILT_IN_PROFILES: tuple[AgentProfile, ...] = (
         built_in=True,
         tags=["writing"],
         avatar=_avatar_url_for("writer"),
+        starter="Help me draft a launch announcement for an internal tool.",
     ),
     AgentProfile(
         name="ops",
@@ -229,6 +238,7 @@ BUILT_IN_PROFILES: tuple[AgentProfile, ...] = (
         built_in=True,
         tags=["ops", "support"],
         avatar=_avatar_url_for("ops"),
+        starter="Run a safe repair pass and tell me what changed.",
     ),
     AgentProfile(
         name="vault-rag",
@@ -249,6 +259,7 @@ BUILT_IN_PROFILES: tuple[AgentProfile, ...] = (
         # must not widen this whitelist with the general Wizard's core tools.
         tags=["rag", "notes", "strict-tools"],
         avatar=_avatar_url_for("vault-rag"),
+        starter="What did I write about my mount-autopilot setup last week?",
     ),
 )
 
@@ -279,6 +290,7 @@ def _library_profile(entry: dict[str, Any]) -> AgentProfile:
         avatar=_avatar_url_for(entry["name"]),
         category=entry.get("category", ""),
         prompt_template=entry.get("prompt_template", ""),
+        starter=entry.get("starter", ""),
     )
 
 

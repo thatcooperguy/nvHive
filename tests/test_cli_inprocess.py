@@ -84,6 +84,7 @@ class TestTopLevel:
     "rag",
     "knowledge",
     "schedule",
+    "vault",
     "template",
     "webhook",
     "workflow",

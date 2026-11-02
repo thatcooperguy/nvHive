@@ -412,6 +412,263 @@ async def _tool_web_search(args: dict[str, Any]) -> dict[str, Any]:
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# 0.46 adds: ask_user (dialogue), remember (vault), generate_image (images)
+# ────────────────────────────────────────────────────────────────────────────
+
+#: ``ask_user``: the one question is cut here; the card shows it verbatim.
+ASK_USER_QUESTION_CHARS = 500
+ASK_USER_MAX_CHOICES = 6
+ASK_USER_CHOICE_CHARS = 80
+ASK_USER_NOTE = "ask_user is answered in the chat; nothing runs on the server."
+
+#: ``remember``: the tool's own caps (the API keeps its larger body cap), the
+#: one category a model-composed note may land in, and its ``Source:``. A body
+#: is refused for two exact literals — ``approval_token`` (the red card's
+#: secret) and :data:`~nvh.integrations.wizard.system_settings.NEEDS_TERMINAL_HINT`
+#: (the sudo note a privileged outcome carries): the privileged audit writer
+#: (``Decisions/``) is the only writer allowed to describe a privileged
+#: action. The word "sudo" on its own is a legitimate memory.
+REMEMBER_TITLE_CHARS = 120
+REMEMBER_BODY_CHARS = 2000
+REMEMBER_MAX_TAGS = 8
+REMEMBER_CATEGORY = "Wizard Memory"
+REMEMBER_SOURCE = "wizard"
+REMEMBER_REFUSED_ERROR = "refused: a memory must not carry an approval token or privileged tool output"
+
+#: ``generate_image``: the sizes and backends the model may ask for, the
+#: output scope and the refusal for a call whose ``profile`` the chat did not
+#: pin (``profile`` is not in the model-visible schema — ``_surfaced_call``
+#: pins it onto the card and the web echoes it back).
+GENERATE_IMAGE_SIZES: tuple[int, ...] = (512, 768, 1024)
+GENERATE_IMAGE_BACKENDS: tuple[str, ...] = ("auto", "local", "nvidia")
+GENERATE_IMAGE_DEFAULT_SIZE = 1024
+GENERATE_IMAGE_PROMPT_CHARS = 2000
+GENERATE_IMAGE_SCOPE = "wizard"
+IMAGE_PROFILE_REFUSAL = "this image request did not come from a Wizard card; re-run it from the chat"
+IMAGE_UNAVAILABLE_ERROR = "image generation is not available in this build (nvh.integrations.imagegen is missing)"
+
+
+async def _tool_ask_user(args: dict[str, Any]) -> dict[str, Any]:
+    """``ask_user`` is answered in the chat; this runs only if a stale client POSTs it.
+
+    The turn that proposes the question ends with a question card; the answer
+    arrives as the user's next message (and as a ``TOOL_RESULT ask_user``
+    history line). Nothing happens on the server, so a client that still
+    renders the card as Run/Skip gets a harmless result.
+    """
+    question = args.get("question")
+    text = " ".join(question.split())[:ASK_USER_QUESTION_CHARS] if isinstance(question, str) else ""
+    return {"answered_in_chat": True, "question": text, "note": ASK_USER_NOTE}
+
+
+def _remember_forbidden_literals() -> tuple[str, ...]:
+    from nvh.integrations.wizard.system_settings import NEEDS_TERMINAL_HINT
+
+    return ("approval_token", NEEDS_TERMINAL_HINT)
+
+
+def _remember_tags(raw: Any) -> list[str]:
+    """At most :data:`REMEMBER_MAX_TAGS` non-empty string tags (the ``wizard`` tag is always added)."""
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        return []
+    tags: list[str] = []
+    for tag in raw:
+        if not isinstance(tag, str) or not tag.strip():
+            continue
+        clean = tag.strip()[:40]
+        if clean.lower() == REMEMBER_SOURCE or clean in tags:
+            continue
+        tags.append(clean)
+        if len(tags) >= REMEMBER_MAX_TAGS:
+            break
+    return tags
+
+
+async def _tool_remember(args: dict[str, Any], *, admission: AtohiAdmission | None = None) -> dict[str, Any]:
+    """Save a model-composed note under the vault's ``Wizard Memory`` — process home only.
+
+    Exactly ``{title, body, tags}`` are read; every other key — a
+    ``home_dir``, a ``category`` — is dropped, so the model never chooses
+    where a file lands and never masquerades as the privileged audit writer.
+    The body is refused when it carries the red card's ``approval_token`` or
+    the sudo note a privileged outcome carries. Redaction happens inside
+    :func:`~nvh.integrations.workspace.vault.append_vault_memory` (best-effort
+    patterns; the confirm card showing the exact note is the human check),
+    then the one note is indexed into the RAG ``vault`` collection,
+    best-effort (``indexed``).
+    """
+    title = args.get("title")
+    body = args.get("body")
+    if not isinstance(title, str) or not title.strip():
+        return {"saved": False, "error": "title required (string)"}
+    if not isinstance(body, str) or not body.strip():
+        return {"saved": False, "error": "body required (string)"}
+    clean_title = " ".join(title.split())[:REMEMBER_TITLE_CHARS]
+    clean_body = body.strip()[:REMEMBER_BODY_CHARS]
+    for literal in _remember_forbidden_literals():
+        if literal in clean_body or literal in clean_title:
+            return {"saved": False, "error": REMEMBER_REFUSED_ERROR}
+    tags = _remember_tags(args.get("tags"))
+
+    from nvh.integrations.workspace.vault import append_vault_memory
+
+    try:
+        note = await asyncio.to_thread(
+            append_vault_memory, clean_title, clean_body,
+            category=REMEMBER_CATEGORY, tags=[REMEMBER_SOURCE, *tags], source=REMEMBER_SOURCE,
+        )
+    except ValueError as exc:
+        return {"saved": False, "error": str(exc)}
+
+    indexed = False
+    try:
+        from nvh.integrations.rag.vault_bridge import index_vault_note
+
+        indexed = bool(await index_vault_note(note["path"], admission=admission))
+    except Exception as exc:  # the index is derived; the note is saved either way
+        logger.debug("remember: index_vault_note failed: %s", exc)
+    return {
+        "saved": True,
+        "id": note["id"],
+        "path": note["path"],
+        "title": note["title"],
+        "category": note["category"],
+        "tags": note["tags"],
+        "indexed": indexed,
+        "redacted": note["redacted"],
+    }
+
+
+def _image_profile_ceiling(profile: Any, *, home_dir: Any = None) -> tuple[bool, float | None]:
+    """``(accepted, ceiling_usd)`` for the ``profile`` the chat pinned onto the card.
+
+    Two shapes are accepted: the general sentinel
+    (:data:`~nvh.integrations.wizard.chat.GENERAL_WIZARD_PROFILE`, no ceiling)
+    and a name :func:`~nvh.integrations.wizard.profiles.get_profile` resolves
+    — in ``home_dir`` when the chat pinned one (``arguments.profile_home``,
+    the request's ``NVH_HOME`` override it read the catalog from), else in the
+    process home — with its ``max_cost_usd_per_turn`` as the ceiling (``None``
+    or ``<= 0`` means none, the profile field's own convention: ``0`` is "no
+    limit", never a $0 cap). Anything else — missing, empty, unknown — is a
+    refusal, never "no ceiling": the pin is how a profile's ceiling reaches
+    the handler, and a call without one did not come through a Wizard card.
+    """
+    if not isinstance(profile, str) or not profile.strip():
+        return False, None
+    name = profile.strip()
+    from nvh.integrations.wizard.chat import GENERAL_WIZARD_PROFILE
+
+    if name == GENERAL_WIZARD_PROFILE:
+        return True, None
+    from nvh.integrations.wizard.profiles import get_profile
+
+    home = home_dir if isinstance(home_dir, str) and home_dir.strip() else None
+    resolved = get_profile(name, home_dir=home)
+    if resolved is None:
+        return False, None
+    ceiling = resolved.max_cost_usd_per_turn
+    if ceiling is not None and ceiling <= 0:
+        ceiling = None
+    return True, None if ceiling is None else float(ceiling)
+
+
+def _image_dimension(value: Any, name: str) -> tuple[int, str | None]:
+    """``(pixels, error)`` for a width/height argument: one of the allowed sizes, default 1024."""
+    if value is None:
+        return GENERATE_IMAGE_DEFAULT_SIZE, None
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        size = -1
+    if size not in GENERATE_IMAGE_SIZES:
+        return 0, f"{name} must be one of {', '.join(str(s) for s in GENERATE_IMAGE_SIZES)}"
+    return size, None
+
+
+def _image_backend(value: Any) -> str:
+    return value if isinstance(value, str) and value in GENERATE_IMAGE_BACKENDS else "auto"
+
+
+async def _plan_generate_image(args: dict[str, Any]) -> dict[str, Any]:
+    """The card's plan: which backend would render and its cost verdict, before Run.
+
+    Computed from the ``profile`` the chat pinned — its ceiling decides
+    whether the paid path may run (a finite ceiling and an unknown price skip
+    it, design §3); a missing pin plans the refusal. Runs nothing: the
+    reachability probe of the recorded ComfyUI runtime is the only I/O, off
+    the event loop. ``summary`` is the plan line the card shows.
+    """
+    accepted, ceiling = _image_profile_ceiling(args.get("profile"), home_dir=args.get("profile_home"))
+    if not accepted:
+        return {"ok": False, "error": IMAGE_PROFILE_REFUSAL, "commands": [], "summary": IMAGE_PROFILE_REFUSAL}
+    try:
+        from nvh.integrations.imagegen import plan_image_backend
+    except ImportError:
+        return {"ok": False, "error": IMAGE_UNAVAILABLE_ERROR, "commands": [], "summary": IMAGE_UNAVAILABLE_ERROR}
+    raw = await asyncio.to_thread(
+        plan_image_backend, cost_ceiling_usd=ceiling, requested=_image_backend(args.get("backend")),
+    )
+    plan: dict[str, Any] = dict(raw) if isinstance(raw, dict) else {}
+    plan.setdefault("commands", [])
+    plan["ok"] = plan.get("backend") is not None
+    if not plan["ok"]:
+        plan.setdefault("error", plan.get("reason") or "no image backend available")
+    plan.setdefault("summary", plan.get("reason") or "")
+    return plan
+
+
+async def _tool_generate_image(args: dict[str, Any], *, admission: AtohiAdmission | None = None) -> dict[str, Any]:
+    """Render one image through :func:`nvh.integrations.imagegen.render_image`.
+
+    ``profile`` is not in the model-visible schema: the chat pins it onto the
+    surfaced call and the web echoes it back, so the ceiling enforced here is
+    the turn's profile's, not one the model chose — and a call without a
+    valid pin is refused rather than run without a ceiling. The file lands
+    under ``$NVH_HOME/outputs/images/<scope>/``; nothing prunes that folder in
+    0.46 and the result says so.
+    """
+    prompt = args.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return {"ok": False, "error": "prompt required (string)"}
+    accepted, ceiling = _image_profile_ceiling(args.get("profile"), home_dir=args.get("profile_home"))
+    if not accepted:
+        return {"ok": False, "error": IMAGE_PROFILE_REFUSAL}
+    width, error = _image_dimension(args.get("width"), "width")
+    if error:
+        return {"ok": False, "error": error}
+    height, error = _image_dimension(args.get("height"), "height")
+    if error:
+        return {"ok": False, "error": error}
+    try:
+        from nvh.integrations.imagegen import ImageGenerationUnavailable, render_image
+    except ImportError:
+        return {"ok": False, "error": IMAGE_UNAVAILABLE_ERROR}
+    try:
+        image = await render_image(
+            prompt.strip()[:GENERATE_IMAGE_PROMPT_CHARS],
+            width=width, height=height, backend=_image_backend(args.get("backend")),
+            cost_ceiling_usd=ceiling, scope=GENERATE_IMAGE_SCOPE,
+        )
+    except ImageGenerationUnavailable as exc:
+        return {"ok": False, "error": str(exc)}
+    return {
+        "ok": True,
+        "url": image.url,
+        "path": image.path,
+        "backend": image.backend,
+        "model": image.model,
+        "width": image.width,
+        "height": image.height,
+        "cost_usd": image.cost_usd,
+        "cost_known": image.cost_known,
+        "latency_ms": image.latency_ms,
+        "note": f"saved to {image.path}; nvHive does not prune this folder",
+    }
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Tool discovery — entry-points + the plugins directory
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -630,6 +887,111 @@ def default_registry(*, admission: AtohiAdmission | None = None) -> WizardToolRe
         },
         handler=partial(_tool_rag_ask_vault, admission=admission),
         summary_template="Search your nvHive Vault for: {question}",
+    ))
+
+    # 0.46: the dialogue tool. Confirm-class by mechanism — the UI renders a
+    # question card and the turn ends; the handler executes nothing and is
+    # reached only by a stale client. chat.py offers it to every profile
+    # (DIALOGUE_TOOLS, O10) and never on an unattended turn.
+    reg.register(WizardTool(
+        name="ask_user",
+        description=(
+            "Ask the user one clarifying question; the answer arrives on the next turn. "
+            "Use it only when the context and tools cannot answer it and the choice changes "
+            "disk, model size or cost. Your turn ends when you ask."
+        ),
+        safety_class="confirm",
+        parameters={
+            "question": {
+                "type": "string", "required": True,
+                "description": "The one question, in plain words (at most 500 characters).",
+                "minLength": 1, "maxLength": ASK_USER_QUESTION_CHARS,
+            },
+            "choices": {
+                "type": "array", "required": False,
+                "description": "Up to six short answer options shown as chips (each at most 80 characters).",
+                "items": {"type": "string", "maxLength": ASK_USER_CHOICE_CHARS}, "maxItems": ASK_USER_MAX_CHOICES,
+            },
+            "allow_free_text": {
+                "type": "boolean", "required": False,
+                "description": "Whether the user may also type a free-text answer (default true).",
+                "default": True,
+            },
+        },
+        handler=_tool_ask_user,
+        summary_template="Question for you: {question}",
+    ))
+
+    # 0.46: the vault memory tool. Confirm-class — the card shows the exact
+    # note before it is written; the handler writes only under the process
+    # home's ``Wizard Memory``. Not in WIZARD_CORE_AUTO_TOOLS (it writes).
+    reg.register(WizardTool(
+        name="remember",
+        description=(
+            "Save a fact the user wants kept across chats as a note in their vault (Wizard Memory). "
+            "Compose a short title and body from the conversation; never include keys, passwords, "
+            "approval tokens or privileged tool output."
+        ),
+        safety_class="confirm",
+        parameters={
+            "title": {
+                "type": "string", "required": True,
+                "description": "One-line title (at most 120 characters).", "maxLength": REMEMBER_TITLE_CHARS,
+            },
+            "body": {
+                "type": "string", "required": True,
+                "description": "The note as the user would want to read it back (at most 2000 characters).",
+                "maxLength": REMEMBER_BODY_CHARS,
+            },
+            "tags": {
+                "type": "array", "required": False,
+                "description": "Up to eight short tags.", "items": {"type": "string"}, "maxItems": REMEMBER_MAX_TAGS,
+            },
+        },
+        handler=partial(_tool_remember, admission=admission),
+        summary_template="Save to your vault: {title}",
+    ))
+
+    # 0.46: image generation from chat. Confirm-class with a planner: the
+    # card's plan line names the backend (NVIDIA-hosted when NVAPI_KEY is
+    # set, else the recorded local ComfyUI) and the cost verdict before Run.
+    # ``profile`` is deliberately absent from the schema — the chat pins it.
+    reg.register(WizardTool(
+        name="generate_image",
+        description=(
+            "Generate an image from a text prompt and save it under the workspace's outputs/images folder. "
+            "NVIDIA-hosted when NVAPI_KEY is set, otherwise the local ComfyUI; the card shows which "
+            "backend will render and what it costs before anything runs."
+        ),
+        safety_class="confirm",
+        parameters={
+            "prompt": {
+                "type": "string", "required": True,
+                "description": "What to draw (at most 2000 characters).",
+                "minLength": 1, "maxLength": GENERATE_IMAGE_PROMPT_CHARS,
+            },
+            "width": {
+                "type": "integer", "required": False,
+                "description": "Image width in pixels: 512, 768 or 1024 (default 1024).",
+                "enum": list(GENERATE_IMAGE_SIZES),
+            },
+            "height": {
+                "type": "integer", "required": False,
+                "description": "Image height in pixels: 512, 768 or 1024 (default 1024).",
+                "enum": list(GENERATE_IMAGE_SIZES),
+            },
+            "backend": {
+                "type": "string", "required": False,
+                "description": (
+                    "auto (NVIDIA-hosted when NVAPI_KEY is set, else local ComfyUI), "
+                    "local (ComfyUI on this machine only) or nvidia."
+                ),
+                "enum": list(GENERATE_IMAGE_BACKENDS),
+            },
+        },
+        handler=partial(_tool_generate_image, admission=admission),
+        planner=_plan_generate_image,
+        summary_template="Generate an image: {prompt}",
     ))
 
     reg.register(WizardTool(

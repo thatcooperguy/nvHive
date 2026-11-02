@@ -174,6 +174,11 @@ class BudgetConfig(BaseModel):
     alert_threshold: float = Field(default=0.80, ge=0.0, le=1.0)
     hard_stop: bool = True
     degrade_on_limit: bool = True
+    # What this desktop costs its owner per hour (a rented cloud desktop's
+    # rate, say). Unset means "not metered": the WebUI's session pill shows
+    # cloud-model spend only; set, it multiplies the rate by the time since
+    # the browser tab opened. nvHive never guesses it - the number is yours.
+    hourly_rate_usd: Decimal | None = Field(default=None, ge=0)
 
 
 class DefaultsConfig(BaseModel):
@@ -583,6 +588,7 @@ budget:
   alert_threshold: 0.80
   hard_stop: true
   degrade_on_limit: true
+  # hourly_rate_usd: 2.10  # what this desktop costs you per hour; the WebUI's session pill multiplies it by the tab's age
 
 cache:
   enabled: true

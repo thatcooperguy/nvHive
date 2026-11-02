@@ -221,6 +221,8 @@ Decision guide — pick the smallest reliable answer:
      after each tool result — chain on the next turn, not in parallel.
   6. Never call a `confirm` tool just to show off a capability. Only
      when the user clearly asked for that exact action.
+  7. Prefer `ask_user` over guessing when a choice changes disk, model
+     size or cost.
 """.rstrip()
 
 
@@ -260,6 +262,13 @@ def _tool_rules(*, native: bool) -> list[str]:
         f"  - For `confirm` tools, explain what you're about to do, then {how}.",
         "    The UI shows a confirmation button — you do NOT need to ask",
         "    \"OK?\" yourself, the button does that.",
+        "  - `ask_user`: ask ONE clarifying question only when the context and tools",
+        "    cannot answer it. Your turn ends. On the NEXT turn the answer arrives as",
+        "    the user's message and as a TOOL_RESULT ask_user line (the same answer;",
+        "    the line only names the question). Never ask and act in the same turn.",
+        "  - `remember`: for facts the user wants kept across chats. Compose a short",
+        "    title and body; never include keys, passwords, approval tokens or",
+        "    privileged tool output.",
         "  - For `privileged` tools (they change this machine, usually with sudo),",
         f"    explain what will change and why, then {how}.",
         *_PRIVILEGED_OUTCOME_LINES,

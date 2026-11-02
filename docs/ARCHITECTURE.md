@@ -69,7 +69,7 @@ nvh CLI · Web UI · Python SDK · MCP clients · OpenAI/Anthropic clients
 | RAG | `nvh/integrations/rag/` | SQLite store, Ollama embeddings, chunker, vault bridge |
 | Installs | `nvh/integrations/installs/` | studio packs, ComfyUI, Node runtime, workstation, OpenClaw |
 | Spark playbooks | `nvh/integrations/installs/playbooks.py` | NVIDIA's DGX Spark playbooks as plans: plan, approve (red card or the CLI prompt), install with a receipt and a vault audit note; extracted from the upstream READMEs, not yet exercised by maintainers on hardware |
-| Services | `nvh/integrations/services/`, `nvh/cli/services.py` | background jobs, receipts, service registry, the bring-up pipeline |
+| Services | `nvh/integrations/services/`, `nvh/cli/services.py` | background jobs, the schedule runner (0.46), receipts, service registry, the bring-up pipeline |
 | Diagnostics | `nvh/integrations/diagnostics/` | boot preflight, smoke tests, model fit, production readiness, redacted reports |
 | MCP | `nvh/mcp_server.py`, `nvh/integrations/mcp_client.py` | server for coding tools; client for external tool servers |
 | CLI | `nvh/cli/main.py`, `repl.py`, `setup.py`, `completions.py` | Typer app, REPL, free-tier wizard |
@@ -140,13 +140,21 @@ graph TB
 The "subtract" release deleted a second, parallel product that nothing in
 `nvh/` imported: the Docker/compose family and stale installers; the
 `~/.hive`-era core modules whose `NVH_HOME` successors already existed
-(knowledge → RAG, memory → vault, scheduler → jobs, smoke_test →
+(knowledge → RAG, memory → vault, the `~/.hive` scheduler →
+`nvh/core/scheduler.py`, smoke_test →
 diagnostics, templates → agent profiles, docker_sandbox →
 `SandboxExecutor.run_shell`); the zero-importer orchestration modules and
 `/v1/locks`; a remote-desktop input-injection toolkit (`tools/`, moved to a
 separate private repository; history remains in this repo before the 0.42
 removal) and the Bun channel plugin (`channel-plugin/`); and the `/query` and
 `/council` web pages.
+The schedules store itself stayed: `nvh/core/scheduler.py` keeps
+`state/schedules.json` (`nvh-schedules/2`), and since 0.46 each run is a
+`schedule-run` job under `jobs/`, written by
+`nvh/integrations/services/schedule_runner.py`, which the API lifespan runs
+in-process behind the heartbeat lock `state/scheduler.lock` (`NVH_SCHEDULER=0`
+turns that off; `nvh schedule start` is the same runner for a box without the
+API).
 One-release hidden aliases cover the renamed CLI spellings
 ([COMMANDS.md](COMMANDS.md#deprecated-spellings)). The full audit is
 [proposals/SIMPLIFICATION_PLAN_2026-09.md](proposals/SIMPLIFICATION_PLAN_2026-09.md).

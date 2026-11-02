@@ -508,6 +508,136 @@ def delete_vault_note(note_id: str, *, home_dir: str | Path | None = None) -> di
     return {"deleted": True, "path": str(path), "id": note_id}
 
 
+# ---------------------------------------------------------------------------
+# Upgrade: pre-0.46 notes gain their header lines (`nvh vault upgrade --add-ids`)
+# ---------------------------------------------------------------------------
+
+
+def _file_eol(raw: str) -> str:
+    return "\r\n" if "\r\n" in raw else "\n"
+
+
+def _write_preserving_eol(path: Path, content: str, token: str) -> None:
+    """tmp + ``os.replace`` without newline translation (the file keeps its own CRLF/LF)."""
+    tmp = path.with_name(f".{path.stem}.{token}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as handle:
+            handle.write(content)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def upgrade_vault_note(
+    path: str | Path, *, home_dir: str | Path | None = None, dry_run: bool = False,
+) -> dict[str, Any]:
+    """Give one ``legacy`` note its ``nvh-memory/1`` header lines: ``{upgraded, id, reason, path}``.
+
+    Exactly the missing header lines are inserted into the note's meta
+    paragraph — ``Id: <derived id>`` (:func:`derived_note_id`, so the id the
+    note already reads as is the one written) and ``Schema: nvh-memory/1`` at
+    its top, ``Source: repl`` (when the note carries the ``#repl`` tag) or
+    ``Source: api`` at its end. The title paragraph and the body are copied
+    byte for byte and the file keeps its own line endings; the write is a
+    temp file plus ``os.replace``. A ``doc`` note (documentation, not a
+    record), an ``nvh-memory/1`` note and an empty or unreadable file are
+    skipped with a ``reason``; ``dry_run`` reports without writing. The note
+    must resolve inside the vault under ``home_dir`` (the process home when
+    ``None``) — the boundary ``list_vault_notes``, ``get_vault_note`` and
+    ``delete_vault_note`` share — else it is refused with ``reason``
+    ``"note is outside the vault"`` and nothing is read or written.
+    """
+    note_path = Path(path)
+    result: dict[str, Any] = {"upgraded": False, "id": "", "reason": "", "path": str(note_path)}
+    try:
+        note_path.resolve().relative_to(_vault_root(home_dir).resolve())
+    except (OSError, ValueError):
+        result["reason"] = "note is outside the vault"
+        return result
+    try:
+        with open(note_path, encoding="utf-8", newline="") as handle:
+            raw = handle.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        result["reason"] = f"could not read the note: {exc}"
+        return result
+    record = parse_vault_note(raw, path=note_path)
+    if record is None:
+        result["reason"] = "empty file"
+        return result
+    result["id"] = record.id
+    if record.schema == DOC_SCHEMA:
+        result["reason"] = "doc note (documentation, not a record)"
+        return result
+    if record.schema != LEGACY_SCHEMA:
+        result["reason"] = f"already {record.schema}"
+        return result
+
+    eol = _file_eol(raw)
+    sep = eol + eol
+    title_end = raw.find(sep)
+    if title_end < 0:
+        result["reason"] = "no meta paragraph found (mixed line endings?)"
+        return result
+    meta_start = title_end + len(sep)
+    next_sep = raw.find(sep, meta_start)
+    meta_end = next_sep if next_sep >= 0 else len(raw)
+    meta = raw[meta_start:meta_end]
+    meta_lines = meta.rstrip("\r\n")
+    trailer = meta[len(meta_lines):]
+    present = {line.split(":", 1)[0].strip().lower() for line in meta_lines.split(eol) if ":" in line}
+
+    head: list[str] = []
+    if "id" not in present:
+        head.append(f"Id: {derived_note_id(note_path)}")
+    if "schema" not in present:
+        head.append(f"Schema: {MEMORY_SCHEMA}")
+    tail: list[str] = []
+    if "source" not in present:
+        tail.append(f"Source: {'repl' if 'repl' in record.tags else 'api'}")
+    if not head and not tail:
+        result["reason"] = "header already complete"
+        return result
+    new_meta = eol.join([*head, meta_lines, *tail])
+    content = raw[:meta_start] + new_meta + trailer + raw[meta_end:]
+    result["id"] = derived_note_id(note_path) if "id" not in present else record.id
+    result["added"] = len(head) + len(tail)
+    if dry_run:
+        result["reason"] = "dry run"
+        result["upgraded"] = True
+        return result
+    try:
+        _write_preserving_eol(note_path, content, result["id"][:8] or "upgrade")
+    except OSError as exc:
+        result["reason"] = f"could not write the note: {exc}"
+        return result
+    result["upgraded"] = True
+    return result
+
+
+def upgrade_vault_notes(*, home_dir: str | Path | None = None, dry_run: bool = False) -> dict[str, Any]:
+    """Run :func:`upgrade_vault_note` over every note the vault walk can see.
+
+    ``{upgraded, skipped, errors, notes}``: ``errors`` lists the notes that
+    could not be read or written (``path: reason``), ``notes`` the per-file
+    results of the ones upgraded (or that would be, under ``dry_run``).
+    Idempotent: a second pass upgrades nothing.
+    """
+    upgraded = 0
+    skipped = 0
+    errors: list[str] = []
+    notes: list[dict[str, Any]] = []
+    for path in _iter_vault_notes(_vault_root(home_dir)):
+        outcome = upgrade_vault_note(path, home_dir=home_dir, dry_run=dry_run)
+        if outcome["upgraded"]:
+            upgraded += 1
+            notes.append(outcome)
+        elif outcome["reason"].startswith("could not"):
+            errors.append(f"{path}: {outcome['reason']}")
+        else:
+            skipped += 1
+    return {"upgraded": upgraded, "skipped": skipped, "errors": errors, "notes": notes, "dry_run": dry_run}
+
+
 def _seed_notes(vault: Path, home: Path) -> dict[str, str]:
     """Seed the vault with starter notes wired for Obsidian Graph view.
 

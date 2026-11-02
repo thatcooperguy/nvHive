@@ -202,7 +202,7 @@ The remaining backends are hand-maintained in `studio_packs.py` and
 
 | Capability | Backend | Min VRAM | Enabled by `install.sh` | Manual |
 |---|---|---|---|---|
-| Image generation (starter) | ComfyUI + Z-Image-Turbo | 8 GB | opt-in | `nvh studio --install comfy -y` |
+| Image generation (starter) | ComfyUI + Z-Image-Turbo | 8 GB | opt-in | `nvh studio --install comfy -y`; from chat: `generate_image` (renders with `NVH_COMFYUI_CHECKPOINT`, or NVIDIA-hosted when `NVAPI_KEY` is set) |
 | Image editing | ComfyUI + Qwen Image Edit | 12 GB | opt-in | `comfy` pack + Qwen Edit template |
 | Image control | ComfyUI + FLUX.1 ControlNet | 16 GB | opt-in | `comfy` pack + FLUX template |
 | Video (5B) | ComfyUI + Wan 2.2 5B | 8 GB | opt-in, 24+ GB tier | `comfy` pack + Wan 5B |

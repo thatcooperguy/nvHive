@@ -25,6 +25,7 @@ from nvh.api.proxy import (
     format_openai_response,
     is_throwdown_model,
     openai_messages_to_nvhive,
+    openai_messages_to_nvhive_history,
     openai_stream_generator,
     parse_council_model,
     resolve_provider_from_model,
@@ -796,3 +797,410 @@ class TestStreamedProxyBudget:
         events = _json_events(resp.text)
         assert len(events) == 1 and events[0]["error"]["type"] == "budget_exceeded"
         assert resp.text.rstrip().endswith("data: [DONE]")
+
+
+# ---------------------------------------------------------------------------
+# History / tools / usage helpers (0.46 §5, B4) — shapes only; the request-level
+# wiring (forwarding by default, ``x-nvhive-history: flatten``) is tested with
+# the server handler.
+# ---------------------------------------------------------------------------
+
+_WEATHER_CALL = {
+    "id": "call_abc",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Austin"}'},
+}
+
+
+class TestOpenAIMessagesToHistory:
+    def test_single_user_turn_has_no_history(self):
+        prompt, system, history = openai_messages_to_nvhive_history([{"role": "user", "content": "hello"}])
+        assert (prompt, system, history) == ("hello", None, [])
+
+    def test_last_user_message_is_the_prompt_and_the_rest_is_history_in_order(self):
+        prompt, system, history = openai_messages_to_nvhive_history([
+            {"role": "system", "content": "you are terse"},
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "reply"},
+            {"role": "user", "content": "second"},
+        ])
+        assert prompt == "second"
+        assert system == "you are terse"
+        assert [(m.role, m.content) for m in history] == [("user", "first"), ("assistant", "reply")]
+        assert all(isinstance(m, Message) for m in history)
+
+    def test_tool_fields_survive_the_conversion(self):
+        prompt, _system, history = openai_messages_to_nvhive_history([
+            {"role": "user", "content": "weather?"},
+            {"role": "assistant", "content": None, "tool_calls": [_WEATHER_CALL]},
+            {"role": "tool", "tool_call_id": "call_abc", "name": "get_weather", "content": "72F"},
+            {"role": "user", "content": "and tomorrow?"},
+        ])
+        assert prompt == "and tomorrow?"
+        assistant, tool = history[1], history[2]
+        assert assistant.tool_calls == [_WEATHER_CALL]
+        assert (tool.role, tool.tool_call_id, tool.name, tool.content) == ("tool", "call_abc", "get_weather", "72F")
+
+    def test_structured_prompt_is_flattened_but_history_parts_are_kept(self):
+        parts = [{"type": "text", "text": "look"}, {"type": "image_url", "image_url": {"url": "x"}}]
+        prompt, _system, history = openai_messages_to_nvhive_history([
+            {"role": "user", "content": parts},
+            {"role": "assistant", "content": "a cat"},
+            {"role": "user", "content": [{"type": "text", "text": "describe"}, {"type": "text", "text": "it"}]},
+        ])
+        assert prompt == "describe it"
+        assert history[0].content == parts
+
+    def test_system_messages_join_and_a_missing_role_reads_as_user(self):
+        prompt, system, history = openai_messages_to_nvhive_history([
+            {"role": "system", "content": "one"},
+            {"role": "system", "content": [{"type": "text", "text": "two"}]},
+            {"content": "no role"},
+        ])
+        assert system == "one\n\ntwo"
+        assert (prompt, history) == ("no role", [])
+
+    def test_transcript_ending_in_a_tool_result_has_an_empty_prompt(self):
+        prompt, _system, history = openai_messages_to_nvhive_history([
+            {"role": "user", "content": "weather?"},
+            {"role": "assistant", "content": None, "tool_calls": [_WEATHER_CALL]},
+            {"role": "tool", "tool_call_id": "call_abc", "content": "72F"},
+        ])
+        assert prompt == ""
+        assert [m.role for m in history] == ["user", "assistant", "tool"]
+
+
+class TestFormatOpenAIResponseToolCalls:
+    def test_default_shape_is_unchanged(self):
+        resp = format_openai_response("hi", "gpt-4o", "openai")
+        assert resp["choices"][0]["message"] == {"role": "assistant", "content": "hi"}
+        assert resp["choices"][0]["finish_reason"] == "stop"
+
+    def test_tool_calls_go_on_the_message_and_finish_the_choice(self):
+        resp = format_openai_response("", "gpt-4o", "openai", tool_calls=[_WEATHER_CALL])
+        message = resp["choices"][0]["message"]
+        assert message["tool_calls"] == [_WEATHER_CALL]
+        assert message["content"] is None
+        assert resp["choices"][0]["finish_reason"] == "tool_calls"
+
+    def test_text_beside_the_calls_is_kept(self):
+        resp = format_openai_response("checking", "gpt-4o", "openai", tool_calls=[_WEATHER_CALL])
+        assert resp["choices"][0]["message"]["content"] == "checking"
+
+    def test_an_empty_list_means_no_calls(self):
+        resp = format_openai_response("hi", "gpt-4o", "openai", tool_calls=[])
+        assert "tool_calls" not in resp["choices"][0]["message"]
+        assert resp["choices"][0]["finish_reason"] == "stop"
+
+
+def _sse_json(out: bytes) -> list[dict]:
+    lines = [line[len("data: "):] for line in out.decode().split("\n") if line.startswith("data: ")]
+    return [json.loads(line) for line in lines if line.strip() != "[DONE]"]
+
+
+def _tool_engine(final: StreamChunk):
+    eng = _meng(True)
+    d = MagicMock()
+    d.provider = "openai"
+    d.model = "gpt-4o"
+    eng.router.route.return_value = d
+    mp = MagicMock()
+    eng.registry.get.return_value = mp
+
+    async def _s(**kw):
+        yield StreamChunk(delta="Let me check", is_final=False)
+        yield final
+    mp.stream.return_value = _s()
+    return eng, mp
+
+
+@pytest.mark.asyncio
+async def test_stream_gen_defaults_emit_no_usage_chunk_and_no_tool_calls():
+    eng, mp = _tool_engine(StreamChunk(
+        delta="", is_final=True, finish_reason=FinishReason.STOP,
+        usage=Usage(input_tokens=10, output_tokens=5, total_tokens=15),
+    ))
+    out = b"".join([c async for c in openai_stream_generator(
+        eng, "hi", "openai", "gpt-4o", None, 0.5, 100, "gpt-4o")])
+    events = _sse_json(out)
+    assert all(e["choices"] for e in events), "no usage-only chunk unless include_usage"
+    assert not any("tool_calls" in e["choices"][0]["delta"] for e in events)
+    assert events[-1]["choices"][0]["finish_reason"] == "stop"
+    assert "tools" not in mp.stream.call_args.kwargs
+    assert out.rstrip().endswith(b"data: [DONE]")
+
+
+@pytest.mark.asyncio
+async def test_stream_gen_emits_tool_calls_then_finish_then_usage_then_done():
+    eng, mp = _tool_engine(StreamChunk(
+        delta="", is_final=True, finish_reason=FinishReason.TOOL_CALLS,
+        usage=Usage(input_tokens=10, output_tokens=5, total_tokens=15),
+        tool_calls=[_WEATHER_CALL, {"function": {"name": "second", "arguments": {"a": 1}}}],
+    ))
+    tools = [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}]
+    out = b"".join([c async for c in openai_stream_generator(
+        eng, "hi", "openai", "gpt-4o", None, 0.5, 100, "gpt-4o",
+        tools=tools, tool_choice="auto", include_usage=True)])
+
+    assert mp.stream.call_args.kwargs["tools"] == tools
+    assert mp.stream.call_args.kwargs["tool_choice"] == "auto"
+
+    events = _sse_json(out)
+    tool_idx = next(i for i, e in enumerate(events) if e["choices"] and "tool_calls" in e["choices"][0]["delta"])
+    finish_idx = next(i for i, e in enumerate(events) if e["choices"] and e["choices"][0]["finish_reason"])
+    usage_idx = next(i for i, e in enumerate(events) if e["choices"] == [])
+    assert tool_idx < finish_idx < usage_idx == len(events) - 1
+    assert out.rstrip().endswith(b"data: [DONE]")
+
+    deltas = events[tool_idx]["choices"][0]["delta"]["tool_calls"]
+    assert deltas[0] == {"index": 0, "id": "call_abc", "type": "function",
+                         "function": {"name": "get_weather", "arguments": '{"city": "Austin"}'}}
+    assert deltas[1]["index"] == 1 and deltas[1]["id"] == "call_1"
+    assert deltas[1]["function"] == {"name": "second", "arguments": '{"a": 1}'}
+    assert events[tool_idx]["choices"][0]["finish_reason"] is None
+    assert events[finish_idx]["choices"][0]["finish_reason"] == "tool_calls"
+    assert events[usage_idx]["usage"] == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    assert events[usage_idx]["object"] == "chat.completion.chunk"
+
+
+@pytest.mark.asyncio
+async def test_stream_gen_native_calls_force_the_tool_calls_finish_reason():
+    eng, _mp = _tool_engine(StreamChunk(
+        delta="", is_final=True, finish_reason=FinishReason.STOP, tool_calls=[_WEATHER_CALL],
+    ))
+    events = _sse_json(b"".join([c async for c in openai_stream_generator(
+        eng, "hi", "openai", "gpt-4o", None, 0.5, 100, "gpt-4o")]))
+    assert events[-1]["choices"][0]["finish_reason"] == "tool_calls"
+    assert any(e["choices"] and "tool_calls" in e["choices"][0]["delta"] for e in events)
+
+
+@pytest.mark.asyncio
+async def test_stream_gen_usage_chunk_is_zeros_when_the_provider_sent_none():
+    eng, _mp = _tool_engine(StreamChunk(delta="", is_final=True, finish_reason=FinishReason.STOP))
+    events = _sse_json(b"".join([c async for c in openai_stream_generator(
+        eng, "hi", "openai", "gpt-4o", None, 0.5, 100, "gpt-4o", include_usage=True)]))
+    assert events[-1]["choices"] == []
+    assert events[-1]["usage"] == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+@pytest.mark.asyncio
+async def test_stream_gen_failed_stream_emits_no_usage_chunk():
+    eng = _meng(True)
+    d = MagicMock()
+    d.provider = "openai"
+    d.model = "gpt-4o"
+    eng.router.route.return_value = d
+    mp = MagicMock()
+    eng.registry.get.return_value = mp
+
+    async def _s(**kw):
+        yield StreamChunk(delta="partial", is_final=False)
+        raise RuntimeError("stream exploded")
+    mp.stream.return_value = _s()
+    events = _sse_json(b"".join([c async for c in openai_stream_generator(
+        eng, "hi", "openai", "gpt-4o", None, 0.5, 100, "gpt-4o", include_usage=True)]))
+    assert any("error" in e for e in events)
+    assert not any(e.get("choices") == [] for e in events)
+
+# ---------------------------------------------------------------------------
+# Handler-level wiring (0.46 §5, B4l): history forwarded by default on the shared
+# chat-completions handler, the ``x-nvhive-history: flatten`` opt-out, tools
+# round-trip, ``stream_options.include_usage`` and the /v1/proxy/health features.
+# ---------------------------------------------------------------------------
+
+_TRANSCRIPT = [
+    {"role": "system", "content": "be terse"},
+    {"role": "user", "content": "first"},
+    {"role": "assistant", "content": "reply"},
+    {"role": "user", "content": "second"},
+]
+_TOOLS = [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}]
+
+
+class RecordingToolProvider(StreamingTestProvider):
+    """Records the ``messages`` and kwargs it is handed; answers with native tool calls when ``tools`` are offered."""
+
+    def __init__(self, name: str = "alpha") -> None:
+        super().__init__(name)
+        self.complete_calls: list[tuple[list[Message], dict]] = []
+        self.stream_calls: list[tuple[list[Message], dict]] = []
+
+    async def complete(self, messages, model=None, temperature=1.0, max_tokens=4096, system_prompt=None, **kw) -> CompletionResponse:
+        self.complete_calls.append((list(messages), kw))
+        if kw.get("tools"):
+            return CompletionResponse(
+                content="", model=model or "test-model", provider=self._name,
+                usage=Usage(input_tokens=10, output_tokens=5, total_tokens=15), cost_usd=Decimal("0.001"),
+                latency_ms=5, finish_reason=FinishReason.TOOL_CALLS, tool_calls=[_WEATHER_CALL],
+            )
+        return await super().complete(messages, model=model, temperature=temperature, max_tokens=max_tokens, system_prompt=system_prompt, **kw)
+
+    async def stream(self, messages, model=None, temperature=1.0, max_tokens=4096, system_prompt=None, **kw):
+        self.stream_calls.append((list(messages), kw))
+        if kw.get("tools"):
+            yield StreamChunk(
+                delta="", is_final=True, accumulated_content="", model=model or "test-model", provider=self._name,
+                usage=Usage(input_tokens=10, output_tokens=5, total_tokens=15), cost_usd=Decimal("0.0005"),
+                finish_reason=FinishReason.TOOL_CALLS, tool_calls=[_WEATHER_CALL],
+            )
+            return
+        async for chunk in super().stream(messages, model=model, temperature=temperature, max_tokens=max_tokens, system_prompt=system_prompt, **kw):
+            yield chunk
+
+
+@pytest.fixture()
+def recording(sync_db, monkeypatch):
+    """``(client, provider)`` — open mode, the provider records what the engine sends it."""
+    monkeypatch.delenv("HIVE_API_KEY", raising=False)
+    provider = RecordingToolProvider("alpha")
+    original = server_module._engine
+    server_module._engine = _make_engine(provider)
+    yield TestClient(app, raise_server_exceptions=True), provider
+    server_module._engine = original
+
+
+def _roles(messages) -> list[tuple[str, str]]:
+    return [(m.role, m.content) for m in messages]
+
+
+class TestHistoryForwarding:
+    """O12: a multi-turn transcript reaches the provider as messages on both the
+    legacy and the standard path, stream or not; the header restores the old string."""
+
+    @pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/proxy/chat/completions"])
+    def test_multi_turn_transcript_reaches_the_provider_as_messages(self, recording, path) -> None:
+        client, provider = recording
+        resp = client.post(path, json={"model": "auto", "messages": _TRANSCRIPT})
+        assert resp.status_code == 200
+        [(messages, _kw)] = provider.complete_calls
+        assert _roles(messages) == [("system", "be terse"), ("user", "first"), ("assistant", "reply"), ("user", "second")]
+
+    def test_flatten_header_restores_the_single_string(self, recording) -> None:
+        client, provider = recording
+        resp = client.post(
+            "/v1/chat/completions", json={"model": "auto", "messages": _TRANSCRIPT},
+            headers={"x-nvhive-history": "flatten"},
+        )
+        assert resp.status_code == 200
+        [(messages, _kw)] = provider.complete_calls
+        assert _roles(messages) == [("system", "be terse"), ("user", "User: first\nAssistant: reply\nUser: second")]
+
+    def test_stream_path_forwards_history_too(self, recording) -> None:
+        client, provider = recording
+        resp = client.post("/v1/chat/completions", json={"model": "auto", "messages": _TRANSCRIPT, "stream": True})
+        assert resp.status_code == 200 and resp.text.rstrip().endswith("data: [DONE]")
+        [(messages, _kw)] = provider.stream_calls
+        assert _roles(messages) == [("system", "be terse"), ("user", "first"), ("assistant", "reply"), ("user", "second")]
+
+    def test_tool_fields_survive_into_the_history(self, recording) -> None:
+        client, provider = recording
+        transcript = [
+            {"role": "user", "content": "weather in Austin?"},
+            {"role": "assistant", "content": None, "tool_calls": [_WEATHER_CALL]},
+            {"role": "tool", "tool_call_id": "call_abc", "name": "get_weather", "content": "72F"},
+            {"role": "user", "content": "and in Dallas?"},
+        ]
+        assert client.post("/v1/chat/completions", json={"model": "auto", "messages": transcript}).status_code == 200
+        [(messages, _kw)] = provider.complete_calls
+        # No system message in the transcript, so the engine's default system
+        # prompt leads; the forwarded turns follow it in order.
+        messages = [m for m in messages if m.role != "system"]
+        assert [m.role for m in messages] == ["user", "assistant", "tool", "user"]
+        assert messages[1].tool_calls == [_WEATHER_CALL]
+        assert messages[2].tool_call_id == "call_abc" and messages[2].name == "get_weather" and messages[2].content == "72F"
+        assert messages[3].content == "and in Dallas?"
+
+    def test_a_transcript_ending_in_a_tool_result_is_flattened_not_refused(self, recording) -> None:
+        client, provider = recording
+        transcript = [
+            {"role": "user", "content": "weather in Austin?"},
+            {"role": "assistant", "content": None, "tool_calls": [_WEATHER_CALL]},
+            {"role": "tool", "tool_call_id": "call_abc", "content": "72F"},
+        ]
+        resp = client.post("/v1/chat/completions", json={"model": "auto", "messages": transcript})
+        assert resp.status_code == 200
+        [(messages, _kw)] = provider.complete_calls
+        # No trailing user turn: the pre-0.46 rendering, which every caller handled
+        # (the engine's default system prompt leads, as it always did).
+        assert _roles([m for m in messages if m.role != "system"]) == [
+            ("user", "User: weather in Austin?\nAssistant: \nUser: 72F"),
+        ]
+
+    def test_council_still_sees_the_whole_transcript_flattened(self, recording, monkeypatch) -> None:
+        client, _provider = recording
+        seen: dict = {}
+
+        async def _run_council(**kwargs):
+            seen.update(kwargs)
+            raise ValueError("stop here")
+
+        monkeypatch.setattr(server_module._engine, "run_council", _run_council)
+        resp = client.post("/v1/chat/completions", json={"model": "council:3", "messages": _TRANSCRIPT})
+        assert resp.status_code == 400  # the ValueError above, mapped by the handler
+        assert seen["prompt"] == "User: first\nAssistant: reply\nUser: second" and seen["system_prompt"] == "be terse"
+
+
+class TestToolsRoundTrip:
+    """``tools`` / ``tool_choice`` reach the provider; native calls come back in the
+    OpenAI shape, non-stream and stream; ``include_usage`` adds the usage chunk."""
+
+    def test_non_stream_tool_calls_come_back_on_the_message(self, recording) -> None:
+        client, provider = recording
+        resp = client.post("/v1/chat/completions", json={
+            "model": "auto", "messages": [{"role": "user", "content": "weather?"}],
+            "tools": _TOOLS, "tool_choice": "auto",
+        })
+        assert resp.status_code == 200
+        [(_messages, kw)] = provider.complete_calls
+        assert kw["tools"] == _TOOLS and kw["tool_choice"] == "auto"
+        choice = resp.json()["choices"][0]
+        assert choice["message"]["tool_calls"] == [_WEATHER_CALL]
+        assert choice["message"]["content"] is None
+        assert choice["finish_reason"] == "tool_calls"
+
+    def test_stream_with_tools_emits_delta_tool_calls_then_finish_then_done(self, recording) -> None:
+        client, provider = recording
+        resp = client.post("/v1/chat/completions", json={
+            "model": "auto", "messages": [{"role": "user", "content": "weather?"}],
+            "tools": _TOOLS, "stream": True,
+        })
+        assert resp.status_code == 200
+        assert provider.stream_calls[0][1]["tools"] == _TOOLS
+        events = _json_events(resp.text)
+        tool_idx = next(i for i, e in enumerate(events) if e["choices"] and "tool_calls" in e["choices"][0]["delta"])
+        finish_idx = next(i for i, e in enumerate(events) if e["choices"] and e["choices"][0]["finish_reason"])
+        assert tool_idx < finish_idx == len(events) - 1  # no usage chunk without stream_options
+        delta = events[tool_idx]["choices"][0]["delta"]["tool_calls"][0]
+        assert delta["function"] == {"name": "get_weather", "arguments": '{"city": "Austin"}'} and delta["id"] == "call_abc"
+        assert events[finish_idx]["choices"][0]["finish_reason"] == "tool_calls"
+        assert resp.text.rstrip().endswith("data: [DONE]")
+
+    def test_include_usage_adds_the_usage_chunk_before_done(self, recording) -> None:
+        client, _provider = recording
+        resp = client.post("/v1/proxy/chat/completions", json={
+            "model": "auto", "messages": [{"role": "user", "content": "hello"}],
+            "stream": True, "stream_options": {"include_usage": True},
+        })
+        assert resp.status_code == 200
+        events = _json_events(resp.text)
+        assert events[-1]["choices"] == []
+        assert events[-1]["usage"] == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        assert events[-2]["choices"][0]["finish_reason"] == "stop"
+        assert resp.text.rstrip().endswith("data: [DONE]")
+
+    def test_response_format_is_accepted_and_not_forwarded(self, recording) -> None:
+        client, provider = recording
+        resp = client.post("/v1/chat/completions", json={
+            "model": "auto", "messages": [{"role": "user", "content": "hello"}],
+            "response_format": {"type": "json_object"},
+        })
+        assert resp.status_code == 200
+        [(_messages, kw)] = provider.complete_calls
+        assert "response_format" not in kw and "tools" not in kw
+
+
+class TestProxyHealthFeatures:
+    def test_features_name_the_0_46_surfaces(self, client: TestClient) -> None:
+        features = client.get("/v1/proxy/health").json()["features"]
+        assert features["standard_paths"] is True and features["tools"] is True and features["history"] is True
+        assert all(features[k] is True for k in ("smart_routing", "council_consensus", "throwdown_analysis", "privacy_header", "streaming"))

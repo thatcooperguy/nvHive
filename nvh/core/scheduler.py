@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from dataclasses import MISSING, dataclass, field, fields
@@ -48,6 +49,19 @@ MAX_ERROR_CHARS = 300
 
 _SAVE_RETRIES = 5
 _SAVE_RETRY_DELAY_S = 0.05
+
+STORE_LOCK = threading.RLock()
+"""Serialises every load-modify-save of the store inside one process.
+
+``Scheduler`` is load-on-construct and every mutator rewrites the whole file,
+so two writers in one process — a ``/v1/schedules`` route on a worker thread
+and the runner's ``mark_run`` on the event loop — could each load, then each
+save, and the later save would drop the earlier record. Hold this lock around
+*construct + mutate* (``with STORE_LOCK: Scheduler().update(...)``); the
+routes and ``nvh/integrations/services/schedule_runner.py`` do. Re-entrant so
+a holder may build a ``Scheduler`` (which loads) and then call a mutator.
+Across processes the runner's heartbeat lock keeps one runner per store.
+"""
 # The retry nap, bound here so tests patch ``scheduler._sleep`` instead of the
 # process-global ``time.sleep`` (CI runs the whole suite in one process).
 _sleep = time.sleep
@@ -84,7 +98,7 @@ class ScheduledTask:
     created_at: str = field(metadata=_doc("ISO-8601 UTC timestamp of when the schedule was added."))
     name: str = field(default="", metadata=_doc("Display label shown beside the prompt."))
     profile: str = field(default="", metadata=_doc(
-        "Agent profile applied to each run; its `max_cost_usd_per_turn` caps the run and its tool whitelist is intersected with the schedule runner's fixed read-only roster."
+        "Agent profile applied to each run; its `max_cost_usd_per_turn` caps the run and, on an unattended `ask` run, its tool whitelist is intersected with `SCHEDULE_AUTO_TOOLS` (`nvh/integrations/wizard/chat.py`), the read-only roster a scheduled turn may call."
     ))
     conversation_id: str = field(default="", metadata=_doc("The one conversation every run of this schedule appends to."))
     updated_at: str = field(default="", metadata=_doc(
@@ -360,8 +374,13 @@ class Scheduler:
         install the other's payload and made the second raise
         ``FileNotFoundError``. The temp file is removed on every failure path,
         the write included, so no ``.tmp`` lingers and the destination is
-        never partial. (Two writers can still race each other's *records*;
-        serialising saves is the schedule runner's lock, Wave B.)
+        never partial. Atomic replacement protects the *file*, not the
+        *records*: a load-modify-save that interleaves with another writer's
+        still drops a record. Inside one process the API routes and the
+        schedule runner hold :data:`STORE_LOCK` around construct + mutate;
+        across processes the runner's heartbeat lock (``state/scheduler.lock``)
+        keeps one runner per store, and a CLI edit beside a live API runner is
+        the one unserialised pair left.
         """
         payload = {
             "schema": SCHEDULE_SCHEMA,

@@ -13,6 +13,7 @@ import time
 from collections.abc import AsyncIterator
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -31,6 +32,7 @@ from nvh.config.settings import (
     RoutingConfig,
 )
 from nvh.core.engine import Engine
+from nvh.integrations.services import schedule_runner
 from nvh.providers.base import (
     CompletionResponse,
     FinishReason,
@@ -907,3 +909,651 @@ class TestDepsContract:
         assert asyncio.run(deps_module.auth_mode()) == "users"
         assert asyncio.run(server_module._auth_open_mode()) is False
         assert deps_module.key_required() is True
+
+# ---------------------------------------------------------------------------
+# 0.46 Wave B (B4l): the routers mounted on the app, the session cost block of
+# /v1/budget/status, the indexed vault save, profile starters, the avatar
+# wording and the /v1/smart refusal of the confirm-class ``imagine`` (Risk 7).
+# ---------------------------------------------------------------------------
+
+_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 24
+
+
+def _seed(coro_factory) -> None:
+    """Run one seeding coroutine against the repository the ``sync_db`` fixture opened."""
+    asyncio.run(coro_factory())
+
+
+async def _backdate(query_id: str, *, hours: float) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import update
+
+    import nvh.storage.repository as repo
+    from nvh.storage.models import QueryLog
+
+    async with repo.get_session() as session:
+        await session.execute(
+            update(QueryLog).where(QueryLog.id == query_id)
+            .values(created_at=datetime.now(UTC) - timedelta(hours=hours))
+        )
+        await session.commit()
+
+
+def _since_ms(*, hours_ago: float) -> int:
+    return int((time.time() - hours_ago * 3600) * 1000)
+
+
+class TestBudgetStatusSession:
+    """``GET /v1/budget/status`` (0.46 §7): ``hourly_rate_usd`` is the owner's figure
+    or ``null``; ``session`` (with ``since``) sums the ledger since one instant and
+    carries the catalog's verdicts; ``platform`` comes from the warmed facts."""
+
+    @pytest.fixture(autouse=True)
+    def _verdict_by_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A model called ``unpriced-*`` has no price; everything else is priced.
+
+        Keeps the logic tests off LiteLLM's table (the real verdict is
+        ``_catalog_cost_known``, exercised by its own tests)."""
+        monkeypatch.setattr(
+            server_module, "_catalog_cost_known",
+            lambda model, provider, cost_usd, **kw: not str(model).startswith("unpriced-"),
+        )
+
+    def test_payload_carries_the_pill_fields_and_the_platform_block(self, test_client: TestClient) -> None:
+        from nvh.utils.platform_facts import detect_platform_facts
+
+        data = test_client.get("/v1/budget/status").json()["data"]
+        assert {"daily_spend", "monthly_spend", "hourly_rate_usd", "daily_cost_known", "session", "platform"} <= set(data)
+        assert data["hourly_rate_usd"] is None  # BudgetConfig default: never guessed
+        assert data["session"] is None  # no ``since`` → no session block
+        facts = detect_platform_facts()
+        assert data["platform"] == {
+            "device_class": facts.device_class,
+            "device_label": facts.device_label,
+            "is_cloud": facts.is_cloud,
+            "cloud_provider": facts.cloud_provider,
+            "is_owned": facts.is_owned,
+        }
+        assert data["platform"]["is_owned"] is True  # conftest: a workstation, not cloud
+
+    def test_hourly_rate_is_the_configured_decimal_as_a_string(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(server_module._engine.config.budget, "hourly_rate_usd", Decimal("2.10"))
+        assert test_client.get("/v1/budget/status").json()["data"]["hourly_rate_usd"] == "2.10"
+
+    def test_since_sums_successful_rows_after_the_cut_per_provider(self, test_client: TestClient) -> None:
+        import nvh.storage.repository as repo
+
+        async def seed() -> None:
+            old = await repo.log_query(mode="simple", provider="openai", model="gpt-x", cost_usd=Decimal("0.50"))
+            await _backdate(old.id, hours=3)
+            await repo.log_query(mode="proxy", provider="openai", model="gpt-x", cost_usd=Decimal("0.10"))
+            await repo.log_query(mode="proxy", provider="groq", model="llama-x", cost_usd=Decimal("0.02"))
+            await repo.log_query(mode="proxy", provider="openai", model="gpt-x", cost_usd=Decimal("0.30"), status="error")
+
+        _seed(seed)
+        since = _since_ms(hours_ago=1)
+        session = test_client.get("/v1/budget/status", params={"since": since}).json()["data"]["session"]
+        assert session["since"] == since
+        assert Decimal(session["spend_usd"]) == Decimal("0.12")  # the 3h-old row and the failed row are out
+        assert {k: Decimal(v) for k, v in session["by_provider"].items()} == {"openai": Decimal("0.10"), "groq": Decimal("0.02")}
+        assert session["cost_known"] is True and session["local_only"] is False and session["unavailable"] is False
+
+    def test_cost_known_is_false_when_one_pair_is_unpriced_even_a_failed_call(self, test_client: TestClient) -> None:
+        import nvh.storage.repository as repo
+
+        async def seed() -> None:
+            await repo.log_query(mode="proxy", provider="openai", model="gpt-x", cost_usd=Decimal("0.10"))
+            # A cloud call that failed still happened: its pair counts for the verdict.
+            await repo.log_query(mode="proxy", provider="openai", model="unpriced-x", cost_usd=Decimal("0"), status="error")
+
+        _seed(seed)
+        session = test_client.get("/v1/budget/status", params={"since": _since_ms(hours_ago=1)}).json()["data"]["session"]
+        assert Decimal(session["spend_usd"]) == Decimal("0.10")
+        assert session["cost_known"] is False
+
+    def test_local_only_is_the_catalogs_verdict_never_a_zero_sum(self, test_client: TestClient) -> None:
+        import nvh.storage.repository as repo
+
+        async def seed_local() -> None:
+            await repo.log_query(mode="wizard-chat", provider="ollama", model="llama3.2", cost_usd=Decimal("0"))
+
+        _seed(seed_local)
+        since = _since_ms(hours_ago=1)
+        session = test_client.get("/v1/budget/status", params={"since": since}).json()["data"]["session"]
+        assert session["local_only"] is True and Decimal(session["spend_usd"]) == 0
+
+        async def seed_cloud_at_zero() -> None:
+            # An unpriced cloud model logs $0 too — the sum stays zero, "local only" must not.
+            await repo.log_query(mode="proxy", provider="openai", model="unpriced-y", cost_usd=Decimal("0"))
+
+        _seed(seed_cloud_at_zero)
+        session = test_client.get("/v1/budget/status", params={"since": since}).json()["data"]["session"]
+        assert Decimal(session["spend_usd"]) == 0
+        assert session["local_only"] is False and session["cost_known"] is False
+
+    def test_daily_cost_known_judges_todays_pairs(self, test_client: TestClient) -> None:
+        import nvh.storage.repository as repo
+
+        assert test_client.get("/v1/budget/status").json()["data"]["daily_cost_known"] is True  # nothing spent
+
+        async def seed() -> None:
+            await repo.log_query(mode="proxy", provider="openai", model="unpriced-z", cost_usd=Decimal("0"))
+
+        _seed(seed)
+        assert test_client.get("/v1/budget/status").json()["data"]["daily_cost_known"] is False
+
+    @pytest.mark.parametrize("since", ["-1", "soon", "1e30", "0", "1761955200"])
+    def test_a_bad_since_is_a_422(self, test_client: TestClient, since: str) -> None:
+        """Negative, non-integer, overflowing — and epoch *seconds* (``1761955200`` is 2025-11-01 in
+        seconds; as milliseconds it is a 1970 instant that would sum the whole ledger)."""
+        resp = test_client.get("/v1/budget/status", params={"since": since})
+        assert resp.status_code == 422, resp.text
+        if since in ("0", "1761955200"):
+            assert "reads as seconds" in resp.json()["detail"]
+        # A real millisecond instant still works.
+        assert test_client.get("/v1/budget/status", params={"since": _since_ms(hours_ago=1)}).status_code == 200
+
+
+class TestVaultMemoryIndexAndNotesRouter:
+    """``POST /v1/vault/memory`` indexes the note best-effort and says so; the
+    ``/v1/vault/notes`` router is mounted on the app and sees the same vault."""
+
+    def test_save_returns_id_and_indexed_and_the_note_is_listed(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        import nvh.integrations.rag as rag
+
+        calls: list[tuple[Path, object, object]] = []
+
+        async def _index(path, *, home_dir=None, admission=None):
+            calls.append((Path(path), home_dir, admission))
+            return True
+
+        monkeypatch.setattr(rag, "index_vault_note", _index)
+        resp = test_client.post("/v1/vault/memory", json={"title": "ComfyUI port", "body": "ComfyUI listens on 8188 on this box."})
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["saved"] is True and len(data["id"]) == 32 and data["schema"] == "nvh-memory/1"
+        assert data["indexed"] is True
+        # The path just written, the request's (absent) home_dir, and the engine's own admission —
+        # the same object every other RAG route hands the embedder (an Atohi broker rides on it).
+        assert calls == [(Path(data["path"]), None, server_module._engine.registry.admission)]
+        assert calls[0][2] is not None
+
+        listed = test_client.get("/v1/vault/notes", params={"memory_only": "true"}).json()["data"]
+        assert any(note["id"] == data["id"] for note in listed["notes"])
+        assert all("body" not in note for note in listed["notes"])
+        one = test_client.get(f"/v1/vault/notes/{data['id']}").json()["data"]
+        assert one["title"] == "ComfyUI port" and "8188" in one["body"]
+
+    def test_an_indexing_failure_never_fails_the_save(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        import nvh.integrations.rag as rag
+
+        async def _boom(path, **kw):
+            raise RuntimeError("no embedder")
+
+        monkeypatch.setattr(rag, "index_vault_note", _boom)
+        resp = test_client.post("/v1/vault/memory", json={"title": "note", "body": "The save stands without an index."})
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["saved"] is True and data["indexed"] is False and Path(data["path"]).exists()
+
+    def test_a_paused_resource_leaves_the_save_standing_and_unindexed(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``ResourcePaused`` is a ``BaseException``: an ``except Exception`` would let it escape as a 500
+        after the note was written. The route catches it by name: 200, ``indexed: false``."""
+        import nvh.integrations.rag as rag
+        from nvh.core.atohi import ResourcePaused
+
+        async def _paused(path, **kw):
+            raise ResourcePaused("broker_unavailable")
+
+        monkeypatch.setattr(rag, "index_vault_note", _paused)
+        resp = test_client.post("/v1/vault/memory", json={"title": "paused", "body": "Written while the GPU was paused."})
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["saved"] is True and data["indexed"] is False and Path(data["path"]).exists()
+
+    def test_notes_router_demands_the_key_when_keyed(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVE_API_KEY", "k-for-test")
+        assert test_client.get("/v1/vault/notes").status_code == 401
+        assert test_client.get("/v1/vault/notes", headers={"X-Hive-API-Key": "k-for-test"}).status_code == 200
+
+
+class TestOutputsRouterMounted:
+    """``GET /v1/outputs/images/{scope}/{filename}`` through the real app: open mode
+    serves the file with the private cache header, a keyed deployment 401s without
+    the key, a foreign scope is a 404."""
+
+    def test_open_serves_keyed_refuses(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        from nvh.integrations.imagegen import outputs_images_root
+
+        folder = outputs_images_root() / "wizard"
+        folder.mkdir(parents=True)
+        (folder / "20261101T120000Z-abcdef12.png").write_bytes(_PNG)
+        url = "/v1/outputs/images/wizard/20261101T120000Z-abcdef12.png"
+
+        monkeypatch.delenv("HIVE_API_KEY", raising=False)
+        resp = test_client.get(url)
+        assert resp.status_code == 200 and resp.content == _PNG
+        assert resp.headers["content-type"].startswith("image/png")
+        assert resp.headers["cache-control"] == "private, max-age=300"
+        assert test_client.get("/v1/outputs/images/other/20261101T120000Z-abcdef12.png").status_code == 404
+
+        monkeypatch.setenv("HIVE_API_KEY", "k-for-test")
+        assert test_client.get(url).status_code == 401
+        assert test_client.get(url, headers={"Authorization": "Bearer k-for-test"}).status_code == 200
+
+
+class TestWizardProfilesStarter:
+    """Rows of ``GET /v1/wizard/profiles`` carry ``starter`` (0.46) and the built-in
+    avatar colours; ``POST`` accepts a ``starter`` for a user profile."""
+
+    def test_rows_carry_starter_and_avatar_colours(self, test_client: TestClient) -> None:
+        from nvh.integrations.wizard.avatars import _BUILT_IN_AVATARS
+
+        rows = test_client.get("/v1/wizard/profiles").json()["data"]["profiles"]
+        assert rows and all({"starter", "accent", "background"} <= set(row) for row in rows)
+        by_name = {row["name"]: row for row in rows}
+        assert by_name["wizard"]["starter"]  # the six core built-ins ship one
+        assert by_name["wizard"]["background"] == _BUILT_IN_AVATARS["wizard"][0]
+        assert by_name["wizard"]["accent"] == _BUILT_IN_AVATARS["wizard"][1]
+        library_row = next(row for row in rows if row["name"] not in _BUILT_IN_AVATARS)
+        assert library_row["accent"] == "" and library_row["background"] == ""
+
+    def test_upsert_accepts_a_starter_and_the_list_returns_it(self, test_client: TestClient) -> None:
+        resp = test_client.post("/v1/wizard/profiles", json={
+            "name": "lab-helper", "title": "Lab helper", "starter": "Check the lab GPU queue.",
+        })
+        assert resp.status_code == 200 and resp.json()["data"]["saved"] is True
+        rows = test_client.get("/v1/wizard/profiles").json()["data"]["profiles"]
+        row = next(r for r in rows if r["name"] == "lab-helper")
+        assert row["starter"] == "Check the lab GPU queue." and row["accent"] == ""
+
+
+class TestAvatarGenerateWording:
+    """The avatar route plans the backend first and names it in the error (0.46 §3)
+    instead of blaming ComfyUI for every failure; the success envelope keeps its keys."""
+
+    @staticmethod
+    def _plan(monkeypatch: pytest.MonkeyPatch, backend: str | None) -> None:
+        import nvh.integrations.imagegen as imagegen
+
+        monkeypatch.setattr(
+            imagegen, "plan_image_backend",
+            lambda **kw: {"backend": backend, "summary": f"planned {backend or 'nothing'}"},
+        )
+
+    def test_error_names_the_planned_backend(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        import nvh.integrations.installs.comfyui as comfyui
+
+        self._plan(monkeypatch, "comfyui")
+
+        async def _boom(prompt, **kw):
+            raise RuntimeError("ComfyUI returned 500")
+
+        monkeypatch.setattr(comfyui, "generate_portrait", _boom)
+        data = test_client.post("/v1/wizard/profiles/wizard/avatar/generate", json={"name": "wizard"}).json()["data"]
+        assert data["ok"] is False
+        assert data["error"] == "Image generation failed (comfyui): ComfyUI returned 500"
+        assert data["backend"] == "comfyui" and data["plan"] == "planned comfyui"
+
+    def test_no_backend_reads_none_with_the_shims_hint(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        import nvh.integrations.installs.comfyui as comfyui
+
+        self._plan(monkeypatch, None)
+
+        async def _unavailable(prompt, **kw):
+            raise NotImplementedError(comfyui.PORTRAIT_UNAVAILABLE_HINT)
+
+        monkeypatch.setattr(comfyui, "generate_portrait", _unavailable)
+        data = test_client.post("/v1/wizard/profiles/wizard/avatar/generate", json={"name": "wizard"}).json()["data"]
+        assert data["ok"] is False and data["backend"] is None
+        assert data["error"].startswith("Image generation failed (none): No portrait generator available")
+
+    def test_success_envelope_keeps_its_keys(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        import nvh.integrations.installs.comfyui as comfyui
+
+        self._plan(monkeypatch, "nvidia")
+
+        async def _render(prompt, **kw):
+            return _PNG, ".png"
+
+        monkeypatch.setattr(comfyui, "generate_portrait", _render)
+        data = test_client.post("/v1/wizard/profiles/wizard/avatar/generate", json={"name": "wizard"}).json()["data"]
+        assert {"ok", "name", "path", "url", "prompt"} <= set(data)
+        assert data["ok"] is True and data["url"] == "/v1/wizard/profiles/wizard/avatar" and data["backend"] == "nvidia"
+        assert Path(data["path"]).read_bytes() == _PNG
+
+
+class TestJobsListFilters:
+    """``GET /v1/jobs`` forwards ``exclude_kind`` / ``schedule_id`` (0.46 §6) to
+    ``list_jobs`` only when given, so a kind-less call is byte-identical to before."""
+
+    def test_filters_reach_list_jobs_only_when_given(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        import nvh.integrations.services.jobs as jobs
+
+        seen: list[dict] = []
+
+        def _list(**kwargs):
+            seen.append(kwargs)
+            return []
+
+        monkeypatch.setattr(jobs, "list_jobs", _list)
+        assert test_client.get("/v1/jobs").json()["data"] == {"jobs": [], "count": 0}
+        test_client.get("/v1/jobs", params={"exclude_kind": "schedule-run", "schedule_id": "abc123", "limit": 8})
+        assert seen == [
+            {"kind": None, "status": None, "limit": 20},
+            {"kind": None, "status": None, "limit": 8, "exclude_kind": "schedule-run", "schedule_id": "abc123"},
+        ]
+
+
+class TestSmartRefusesImagine:
+    """Risk 7 / O3: ``imagine`` is confirm-class and ``/v1/smart`` runs the agent loop
+    with no confirm callback, so an image task is refused — "Tool requires approval:
+    imagine" is what the loop feeds back and what the answer says — and the image
+    backend is never called, never billed."""
+
+    def test_image_task_is_refused_and_never_bills(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        fed: list[str] = []
+
+        async def _query(**kwargs):
+            fed.append(kwargs["prompt"])
+            if len(fed) == 1:
+                content = 'TOOL_CALL: {"name": "imagine", "arguments": {"prompt": "a hero image for the lab wiki"}}'
+            else:
+                # The model relays the tool error it was handed, as a real one would.
+                error = next((line for line in kwargs["prompt"].splitlines() if line.startswith("Error:")), "Error: ?")
+                content = f"I can't render that from here — {error.removeprefix('Error: ')}."
+            return SimpleNamespace(
+                content=content, cost_usd=None, tool_calls=None, model="test-model", provider="alpha", usage=None,
+            )
+
+        monkeypatch.setattr(server_module._engine, "query", _query)
+        generate = AsyncMock(return_value="/nowhere/hero.png")
+        with patch("nvh.core.image_gen.generate_image", generate):
+            resp = test_client.post(
+                "/v1/smart", json={"prompt": "create a hero image for the lab wiki and then post it on the wiki"},
+            )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["type"] == "agent" and data["completed"] is True
+        assert data["tool_calls"] == 0  # nothing ran
+        assert "Tool requires approval: imagine" in fed[1]
+        assert "Tool requires approval: imagine" in data["output"]
+        generate.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Schedules router through the real app  (design 0.46 §6; B4s)
+# ---------------------------------------------------------------------------
+
+
+class TestSchedulesRouterMounted:
+    """The seven ``/v1/schedules`` routes answer through ``nvh.api.server.app``.
+
+    The routes themselves are tested on a minimal app in tests/test_schedule_runner.py;
+    these are the mount smoke: the list carries the runner block with the
+    unattended tool roster, ``mode: do`` is a 422 with the exact refusal, the
+    round trip (create, read, patch, run now, run log, delete) works end to end,
+    and a keyed deployment refuses without the key. The store is the hermetic
+    home's ``state/schedules.json``; nothing runs (``run_schedule_once`` is patched).
+    """
+
+    def test_list_carries_runner_block_and_do_is_refused(self, test_client: TestClient) -> None:
+        from nvh.integrations.wizard.chat import SCHEDULE_AUTO_TOOLS
+
+        resp = test_client.get("/v1/schedules")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["schedules"] == [] and data["count"] == 0
+        runner = data["runner"]
+        assert runner["active"] is False
+        assert runner["tools"] == sorted(SCHEDULE_AUTO_TOOLS) and runner["tools"]
+        assert runner["history"] == schedule_runner.SCHEDULE_RUN_HISTORY
+        assert {"pid", "lock_path", "heartbeat", "stale"} <= set(runner)
+
+        refused = test_client.post(
+            "/v1/schedules", json={"prompt": "install everything", "every": "1h", "mode": "do"},
+        )
+        assert refused.status_code == 422, refused.text
+        assert refused.json()["detail"] == schedule_runner.DO_REFUSED
+        assert test_client.get("/v1/schedules").json()["data"]["count"] == 0  # nothing was stored
+
+    def test_seven_routes_round_trip(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        created = test_client.post(
+            "/v1/schedules",
+            json={"prompt": "what changed in the vault today?", "every": "1h", "name": "Vault digest"},
+        )
+        assert created.status_code == 201, created.text
+        record = created.json()["data"]
+        schedule_id = record["id"]
+        assert len(schedule_id) == 32 and record["mode"] == "ask" and record["enabled"] is True
+        assert record["interval_seconds"] == 3600 and record["name"] == "Vault digest"
+
+        got = test_client.get(f"/v1/schedules/{schedule_id}")
+        assert got.status_code == 200 and got.json()["data"]["id"] == schedule_id
+
+        patched = test_client.patch(f"/v1/schedules/{schedule_id}", json={"enabled": False, "every": "30m"})
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["data"]["enabled"] is False
+        assert patched.json()["data"]["interval_seconds"] == 1800
+
+        ran_with: list[str] = []
+
+        async def _fake_run_once(task, **kwargs):
+            ran_with.append(task.id)
+            return "20261101120000-deadbeef"
+
+        monkeypatch.setattr(schedule_runner, "run_schedule_once", _fake_run_once)
+        run = test_client.post(f"/v1/schedules/{schedule_id}/run")
+        assert run.status_code == 202, run.text
+        assert run.json()["data"] == {"job_id": "20261101120000-deadbeef", "schedule_id": schedule_id}
+        assert ran_with == [schedule_id]
+
+        runs = test_client.get(f"/v1/schedules/{schedule_id}/runs?limit=5")
+        assert runs.status_code == 200, runs.text
+        assert runs.json()["data"] == {"runs": [], "count": 0, "schedule_id": schedule_id}
+
+        deleted = test_client.delete(f"/v1/schedules/{schedule_id}")
+        assert deleted.status_code == 200 and deleted.json()["data"]["deleted"] is True
+        assert test_client.get(f"/v1/schedules/{schedule_id}").status_code == 404
+        assert test_client.get("/v1/schedules").json()["data"]["count"] == 0
+
+    def test_keyed_deployment_refuses_without_the_key(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVE_API_KEY", "k-for-schedules")
+        assert test_client.get("/v1/schedules").status_code == 401
+        assert test_client.post("/v1/schedules", json={"prompt": "x", "every": "1h"}).status_code == 401
+        assert test_client.get("/v1/schedules/nope").status_code == 401
+        ok = test_client.get("/v1/schedules", headers={"X-Hive-API-Key": "k-for-schedules"})
+        assert ok.status_code == 200
+        assert test_client.get("/v1/schedules", headers={"Authorization": "Bearer k-for-schedules"}).status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Lifespan: the schedule runner task  (design 0.46 §6 / Risk 3; B4s)
+# ---------------------------------------------------------------------------
+
+
+class _LifespanStubRegistry:
+    def list_enabled(self) -> list[str]:
+        return []
+
+
+class _LifespanStubEngine:
+    """Engine stand-in for the real lifespan: no providers, no DB, no network."""
+
+    webhooks = None
+    _initialized = True
+    registry = _LifespanStubRegistry()
+
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    async def initialize(self) -> list[str]:
+        return []
+
+
+@pytest.fixture()
+def scheduler_lifespan_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Run the real lifespan against the hermetic home with a stub Engine.
+
+    Same shape as ``lifespan_env`` in tests/test_api_server_endpoints.py; the
+    home stays conftest's hermetic ``NVH_HOME`` so ``schedule_runner.lock_path()``
+    is where a real loop would write.
+    """
+    import nvh.cli.setup as nvh_setup
+
+    monkeypatch.setenv("HIVE_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("NVH_BOOT_PREFLIGHT", "0")
+    monkeypatch.delenv("NVH_USE_KEYRING", raising=False)
+    monkeypatch.setattr(nvh_setup, "DEFAULT_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(server_module, "Engine", _LifespanStubEngine)
+    monkeypatch.setattr(server_module, "_engine", None)
+
+
+class TestLifespanScheduler:
+    """``NVH_SCHEDULER=1`` starts ``run_loop`` after the engine is ready and shutdown
+    stops it: the stop event is set first, then the task is cancelled once the
+    bounded wait runs out. With conftest's default ``NVH_SCHEDULER=0`` no task
+    starts and no ``state/scheduler.lock`` appears under the hermetic home."""
+
+    def test_runner_started_then_stopped_and_cancelled_on_shutdown(
+        self, scheduler_lifespan_env, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("NVH_SCHEDULER", "1")
+        monkeypatch.setenv("NVH_SCHEDULER_POLL_S", "7")
+        monkeypatch.setattr(server_module, "_SCHEDULER_STOP_TIMEOUT_S", 0.2)
+        seen: dict[str, object] = {}
+
+        async def _recording_run_loop(stop: asyncio.Event, **kwargs) -> bool:
+            seen.update(kwargs)
+            seen["started"] = True
+            await stop.wait()
+            seen["stop_seen"] = True
+            await asyncio.sleep(3600)  # a run "in flight" that ignores stop: shutdown must cancel it
+            return True
+
+        monkeypatch.setattr(schedule_runner, "run_loop", _recording_run_loop)
+
+        with TestClient(app) as client:
+            assert client.get("/v1/health").status_code == 200
+            task = app.state.scheduler_task
+            assert isinstance(task, asyncio.Task) and not task.done()
+            assert task.get_name() == "nvh-schedule-runner"
+            assert seen.get("started") is True
+            assert app.state.scheduler_stop.is_set() is False
+
+        assert seen["poll_s"] == 7.0 and seen["runner"] == "api"
+        assert seen["stop_seen"] is True, "shutdown set the stop event before anything else"
+        assert app.state.scheduler_stop.is_set()
+        assert task.done() and task.cancelled(), "the stuck loop was cancelled after the bounded wait"
+        assert not schedule_runner.lock_path().exists()
+
+    def test_real_run_loop_waits_for_a_held_lock_instead_of_giving_up(
+        self, scheduler_lifespan_env, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The REAL ``run_loop`` under the lifespan while ``nvh schedule start`` holds the lock: the task
+        stays alive and waits (no takeover, nothing polled), one INFO line says so, and shutdown ends
+        it cleanly with the holder's lock untouched — the API is never left without a scheduler.
+        (The lifespan's ``setup_logging`` routes records to stdout, so the lines are read there.)"""
+        import json
+
+        monkeypatch.setenv("NVH_SCHEDULER", "1")
+        monkeypatch.setenv("NVH_SCHEDULER_POLL_S", "0.05")
+        holder = schedule_runner.ScheduleLock(schedule_runner.lock_path(), poll_s=60, runner=schedule_runner.RUNNER_CLI)
+        assert holder.acquire()
+        try:
+            with TestClient(app) as client:
+                assert client.get("/v1/health").status_code == 200
+                time.sleep(0.3)
+                task = app.state.scheduler_task
+                assert isinstance(task, asyncio.Task) and not task.done(), "waiting, not finished"
+                assert json.loads(schedule_runner.lock_path().read_text(encoding="utf-8"))["runner"] == "cli"
+            assert task.done() and not task.cancelled() and task.result() is False
+            out = capsys.readouterr().out
+            assert "Schedule runner waiting: a live cli runner" in out
+            assert "Schedule runner ended without polling" in out
+            assert "Taking over" not in out
+            assert json.loads(schedule_runner.lock_path().read_text(encoding="utf-8"))["runner"] == "cli"
+        finally:
+            holder.release()
+
+    def test_a_runner_that_dies_at_start_is_logged_not_silent(
+        self, scheduler_lifespan_env, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A runner task that raises is retrieved by the done-callback and logged at ERROR — not left
+        for asyncio's "Task exception was never retrieved" at garbage-collection time."""
+        monkeypatch.setenv("NVH_SCHEDULER", "1")
+
+        async def _dies(stop: asyncio.Event, **kwargs) -> bool:
+            raise RuntimeError("lock dir unwritable")
+
+        monkeypatch.setattr(schedule_runner, "run_loop", _dies)
+        with TestClient(app) as client:
+            assert client.get("/v1/health").status_code == 200
+            task = app.state.scheduler_task
+            assert task.done() and isinstance(task.exception(), RuntimeError)
+        assert "Schedule runner stopped with an error: lock dir unwritable" in capsys.readouterr().out
+
+    def test_default_off_starts_no_task_and_writes_no_lock(self, scheduler_lifespan_env, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert server_module.os.environ.get("NVH_SCHEDULER") == "0"  # conftest's autouse default
+        calls: list[dict[str, object]] = []
+
+        async def _never_run_loop(stop: asyncio.Event, **kwargs) -> bool:
+            calls.append(kwargs)
+            return True
+
+        monkeypatch.setattr(schedule_runner, "run_loop", _never_run_loop)
+
+        with TestClient(app) as client:
+            assert client.get("/v1/health").status_code == 200
+            assert app.state.scheduler_task is None
+            assert isinstance(app.state.scheduler_stop, asyncio.Event)
+
+        assert calls == []
+        assert not schedule_runner.lock_path().exists()
+        assert not list(schedule_runner.lock_path().parent.glob("scheduler.lock*"))  # no heartbeat tmp either
+
+    def test_poll_seconds_env_is_validated(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("NVH_SCHEDULER_POLL_S", raising=False)
+        assert server_module._scheduler_poll_s() == schedule_runner.DEFAULT_POLL_S
+        monkeypatch.setenv("NVH_SCHEDULER_POLL_S", "15")
+        assert server_module._scheduler_poll_s() == 15.0
+        for bad in ("0", "-3", "soon", "inf", "nan"):
+            monkeypatch.setenv("NVH_SCHEDULER_POLL_S", bad)
+            assert server_module._scheduler_poll_s() == schedule_runner.DEFAULT_POLL_S, bad
+        for off in ("0", "false", "off", " No "):
+            monkeypatch.setenv("NVH_SCHEDULER", off)
+            assert server_module._scheduler_enabled() is False, off
+        monkeypatch.setenv("NVH_SCHEDULER", "1")
+        assert server_module._scheduler_enabled() is True
+
+    def test_reload_parent_defaults_the_scheduler_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``run_server(reload=True)`` is uvicorn's reloader parent; it sets ``NVH_SCHEDULER=0``
+        for the worker it spawns unless the operator chose a value (setdefault)."""
+        import sys as _sys
+        from types import ModuleType
+
+        fake_uvicorn = ModuleType("uvicorn")
+        runs: list[dict[str, object]] = []
+        fake_uvicorn.run = lambda *args, **kwargs: runs.append(kwargs)  # type: ignore[attr-defined]
+        monkeypatch.setitem(_sys.modules, "uvicorn", fake_uvicorn)
+        # run_server also exports the port/bind facts. ``delenv(raising=False)`` on an absent name
+        # records nothing, so set each one first: then monkeypatch really does put every one back
+        # (CI runs the whole suite in one process; a leaked NVH_API_SERVER_PROCESS=1 would make
+        # later tests look like the running API server).
+        for var in ("NVH_SCHEDULER", "NVH_API_PORT", "NVH_API_SERVER_PROCESS", "NVH_API_BIND_HOST"):
+            monkeypatch.setenv(var, server_module.os.environ.get(var, ""))
+            monkeypatch.delenv(var)
+        monkeypatch.setitem(app.state._state, "bind_host", app.state._state.get("bind_host"))
+
+        server_module.run_server(host="127.0.0.1", port=8999, reload=True)
+        assert server_module.os.environ["NVH_SCHEDULER"] == "0"
+        assert runs and runs[-1]["reload"] is True
+
+        monkeypatch.setenv("NVH_SCHEDULER", "1")
+        server_module.run_server(host="127.0.0.1", port=8999, reload=True)
+        assert server_module.os.environ["NVH_SCHEDULER"] == "1"  # an explicit choice wins
+
+        monkeypatch.delenv("NVH_SCHEDULER", raising=False)
+        server_module.run_server(host="127.0.0.1", port=8999, reload=False)
+        assert "NVH_SCHEDULER" not in server_module.os.environ  # a plain `nvh serve` runs the scheduler

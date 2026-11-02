@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from datetime import date
 from decimal import Decimal
@@ -593,3 +594,74 @@ def test_legacy_homes_warns_about_the_retired_data_dir_knob(legacy_homes, monkey
     row = asyncio.run(_rows("legacy_homes", legacy_homes.ctx))[0]
     assert row.status == "warn" and row.detail.startswith("imported on 2026-10-31: 0 copied")
     assert "NVH_STATE=/srv/old-data/state" in row.detail
+
+
+# ---------------------------------------------------------------------------
+# scheduler row (0.46): task count, which process runs schedules, quarantine
+# ---------------------------------------------------------------------------
+
+
+def test_scheduler_row_names_the_runner_and_counts_tasks():
+    from nvh.core.scheduler import Scheduler
+    from nvh.integrations.services import schedule_runner
+
+    assert asyncio.run(_rows("scheduler", _ctx()))[0].detail == "0 task(s) · runner: none"
+    Scheduler().add("ping", 60)
+    row = asyncio.run(_rows("scheduler", _ctx()))[0]
+    assert row.status == "info" and row.detail == "1 task(s) · runner: none"
+    assert row.data["tasks"] == 1 and row.data["runner"] == "none" and row.data["runner_pid"] is None
+
+    lock = schedule_runner.ScheduleLock(schedule_runner.lock_path(), poll_s=60, runner=schedule_runner.RUNNER_API)
+    assert lock.acquire()
+    try:
+        row = asyncio.run(_rows("scheduler", _ctx()))[0]
+        assert row.detail == "1 task(s) · runner: api" and row.data["runner_pid"] == os.getpid()
+    finally:
+        lock.release()
+
+    cli_lock = schedule_runner.ScheduleLock(schedule_runner.lock_path(), poll_s=60, runner=schedule_runner.RUNNER_CLI)
+    assert cli_lock.acquire()
+    try:
+        assert asyncio.run(_rows("scheduler", _ctx()))[0].detail == "1 task(s) · runner: cli"
+    finally:
+        cli_lock.release()
+
+
+def test_scheduler_row_reports_a_lock_it_cannot_read_as_held_by_an_unknown_runner(monkeypatch):
+    """A lock another account owns (or a sharing violation that outlasts the retries) is held, not
+    stale: the row says so instead of ``none`` while two runners could be alive."""
+    from nvh.integrations.services import schedule_runner
+
+    schedule_runner.lock_path().parent.mkdir(parents=True, exist_ok=True)
+    schedule_runner.lock_path().write_text("{}", encoding="utf-8")
+
+    def denied(path):
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(schedule_runner, "_read_lock_text", denied)
+    monkeypatch.setattr(schedule_runner, "LOCK_READ_RETRY_S", 0)
+    row = asyncio.run(_rows("scheduler", _ctx()))[0]
+    assert row.status == "info" and row.detail == "0 task(s) · runner: unknown (lock unreadable)"
+    assert row.data["runner"] == "unknown (lock unreadable)" and row.data["runner_pid"] is None
+
+
+def test_scheduler_row_warns_and_names_the_newest_quarantined_store():
+    from nvh.core.scheduler import default_schedule_file
+
+    store = default_schedule_file()
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_text("{not json", encoding="utf-8")
+    row = asyncio.run(_rows("scheduler", _ctx()))[0]  # constructing Scheduler() quarantines the file
+    corrupt = sorted(store.parent.glob("schedules.json.corrupt-*"))
+    assert len(corrupt) == 1 and not store.exists()
+    assert row.status == "warn"
+    assert row.detail.startswith("0 task(s) · runner: none · ") and corrupt[0].name in row.detail
+    assert "quarantined" in row.detail and corrupt[0].name in row.fix and "nvh schedule add" in row.fix
+    assert row.data["quarantined"] == [corrupt[0].name]
+
+    # An older quarantine beside a newer one: the newest is the one named.
+    older = store.with_name("schedules.json.corrupt-20200101000000")
+    older.write_text("[", encoding="utf-8")
+    row = asyncio.run(_rows("scheduler", _ctx()))[0]
+    assert corrupt[0].name in row.detail and older.name not in row.detail
+    assert row.data["quarantined"] == [older.name, corrupt[0].name]

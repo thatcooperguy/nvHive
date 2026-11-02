@@ -155,6 +155,26 @@ def test_detect_comfyui_reports_installed_stopped_and_runtime(tmp_path, monkeypa
     assert status["runtime_strategy"] == "venv"
 
 
+def test_detect_comfyui_ignores_a_recorded_host_that_is_not_loopback(tmp_path, monkeypatch) -> None:
+    """``start_comfyui`` only ever writes a loopback host; a runtime file naming another machine is
+    ignored (the port is still honoured) so the probe — and every renderer behind it — stays local."""
+    monkeypatch.setenv("COMFYUI_HOME", str(tmp_path))
+    probed: list[tuple[str, int]] = []
+    monkeypatch.setattr(comfyui, "_is_http_reachable", lambda host="127.0.0.1", port=8188: probed.append((host, port)) or False)
+    monkeypatch.setattr(comfyui, "_port_open", lambda host="127.0.0.1", port=8188: False)
+    comfyui._runtime_file(tmp_path).write_text(json.dumps({"host": "internal-host", "port": 9000}), encoding="utf-8")
+
+    status = comfyui.detect_comfyui()
+
+    assert status["host"] == "127.0.0.1" and status["port"] == 9000
+    assert probed == [("127.0.0.1", 9000)]
+    assert status["url"] == "http://127.0.0.1:9000"
+
+    comfyui._runtime_file(tmp_path).write_text(json.dumps({"host": "localhost", "port": 9001}), encoding="utf-8")
+    status = comfyui.detect_comfyui()
+    assert status["host"] == "localhost" and status["port"] == 9001  # a recorded loopback host is honoured
+
+
 def test_start_comfyui_uses_next_free_port_on_conflict(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("COMFYUI_HOME", str(tmp_path))
     app_dir = tmp_path / "ComfyUI"

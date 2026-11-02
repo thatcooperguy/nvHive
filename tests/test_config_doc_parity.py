@@ -32,7 +32,13 @@ from nvh.core.agents import COUNCIL_PRESETS, PRESET_DESCRIPTIONS
 from nvh.core.scheduler import ScheduledTask
 from nvh.core.tools import SAFETY_CLASSES
 from nvh.integrations.diagnostics.checks import DEEP, checks_for
-from nvh.integrations.wizard.chat import WIZARD_META_KEYS
+from nvh.integrations.imagegen import CEILING_NO_LOCAL_HINT, RETENTION_NOTE, ceiling_reason
+from nvh.integrations.services.schedule_runner import (
+    DEFAULT_POLL_S,
+    DO_REFUSED,
+    SCHEDULE_RUN_HISTORY,
+)
+from nvh.integrations.wizard.chat import SCHEDULE_AUTO_TOOLS, WIZARD_META_KEYS
 from nvh.integrations.workspace.migrate_legacy import LEGACY_MIGRATION_ENV
 from nvh.integrations.workspace.vault import MemoryRecord
 
@@ -276,3 +282,54 @@ def test_legacy_homes_paragraph_names_the_doctor_row(doc: str):
     assert f"`{LEGACY_MIGRATION_ENV}=0`" in section
     row = next(line for line in doc.splitlines() if line.startswith(f"| `{LEGACY_MIGRATION_ENV}` |"))
     assert f"`{check.id}`" in row
+
+
+# --- the 0.46 prose around the schedule record and the Wizard tools ------------
+
+
+def _schedule_prose(doc: str) -> str:
+    return _section(doc, "### Schedule records (`nvh-schedules/2`)", "<!-- BEGIN GENERATED: schedule-record -->")
+
+
+def test_schedule_prose_quotes_the_runner_roster_retention_and_do_refusal(doc: str):
+    """The hand-written schedule prose repeats the runner's constants, so it is
+    pinned to them: the roster's name and every member of ``SCHEDULE_AUTO_TOOLS``,
+    the history depth, the exact sentence a ``mode: do`` schedule gets from the
+    API runner and the lifespan switch; the ``profile`` field's own doc sentence
+    names the roster too."""
+    prose = _schedule_prose(doc)
+    assert "`SCHEDULE_AUTO_TOOLS`" in prose
+    for name in SCHEDULE_AUTO_TOOLS:
+        assert f"`{name}`" in prose, name
+    assert f"last {SCHEDULE_RUN_HISTORY} runs" in prose
+    assert DO_REFUSED in prose
+    assert "`NVH_SCHEDULER=0`" in prose
+    profile_doc = next(f for f in dataclasses.fields(ScheduledTask) if f.name == "profile").metadata["doc"]
+    assert "`SCHEDULE_AUTO_TOOLS`" in profile_doc
+
+
+def test_scheduler_env_row_and_lock_cell_describe_the_runner(doc: str):
+    row = next(line for line in doc.splitlines() if line.startswith("| `NVH_SCHEDULER` |"))
+    assert "| unset (on) |" in row and "`0`" in row and "`state/scheduler.lock`" in row
+    poll_row = next(line for line in doc.splitlines() if line.startswith("| `NVH_SCHEDULER_POLL_S` |"))
+    assert f"| `{int(DEFAULT_POLL_S)}` |" in poll_row and "three" in poll_row
+    state_row = next(line for line in doc.splitlines() if line.startswith("| `state/` |"))
+    assert "nothing writes it yet" not in state_row and "heartbeat" in state_row
+
+
+def test_wizard_tools_prose_carries_the_card_sentences(doc: str, stock: list):
+    """The Tools prose for ``ask_user``, ``remember`` and ``generate_image`` quotes
+    the exact sentences the code puts on the card (the image refusal, the
+    retention note, the ceiling verdicts), agrees with the registry on their
+    class, and the core table stars ``imagine`` now that it is confirm-class."""
+    section = _section(doc, "### Questions, memories and images from the Wizard chat", "## Workflows")
+    rows = {cells[0].strip("`"): cells for cells in (_cells(r) for r in section.splitlines() if r.startswith("| `"))}
+    for name in ("ask_user", "remember", "generate_image"):
+        tool = next(t for t in stock if t.name == name)
+        assert rows[name][1] == tool.safety_class == "confirm", name
+    image = rows["generate_image"][2]
+    assert wizard_tools.IMAGE_PROFILE_REFUSAL in image
+    assert RETENTION_NOTE in image
+    assert ceiling_reason(0.05, comfyui_reachable=True) in image
+    assert CEILING_NO_LOCAL_HINT in image
+    assert "`imagine`\\*" in doc

@@ -544,3 +544,66 @@ class TestCouncilStreamingEvents:
         assert has_error or has_synth_complete or has_council_complete, (
             f"Expected terminal event. Got: {event_types}"
         )
+
+
+# ---------------------------------------------------------------------------
+# 5. Streamed usage through an OpenAI-compatible provider (0.46): the ledger
+#    row of a streamed call carries the provider's prompt tokens, not 0 and an
+#    estimate, when LiteLLM says the route takes ``stream_options``.
+# ---------------------------------------------------------------------------
+
+
+class TestStreamedUsageTrailer:
+    """Before 0.46 ``OpenAICompatibleProvider.stream`` never asked for
+    ``stream_options={"include_usage": True}``, so a provider whose finish chunk
+    carries no usage logged ``input_tokens=0`` and an estimated output count on
+    every streamed row (the proxy's ``_log_stream_spend``, the Wizard's meter).
+    The support probe is LiteLLM's own parameter table, patched here."""
+
+    @pytest.mark.asyncio
+    async def test_streamed_ledger_row_carries_the_providers_prompt_tokens(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+
+        import nvh.providers.openai_compatible as oc
+        from nvh.api.proxy import _stream_ledger_response
+        from nvh.providers.base import Message
+
+        async def litellm_stream():
+            yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="four words"), finish_reason=None)])
+            yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=""), finish_reason="stop")])
+            yield SimpleNamespace(choices=[], usage=SimpleNamespace(prompt_tokens=123, completion_tokens=2, total_tokens=125))
+
+        provider = oc.OpenAICompatibleProvider(oc.PROVIDER_SPECS["openai"])
+        with patch("nvh.providers.openai_compatible.litellm.get_supported_openai_params", return_value=["stream_options"]), \
+                patch("nvh.providers.openai_compatible.litellm.acompletion", new=AsyncMock(return_value=litellm_stream())) as ac:
+            chunks = [c async for c in provider.stream([Message(role="user", content="hi")])]
+
+        assert ac.await_args.kwargs["stream_options"] == {"include_usage": True}
+        assert chunks[-1].is_final and chunks[-1].usage is not None
+        assert (chunks[-1].usage.input_tokens, chunks[-1].usage.output_tokens) == (123, 2)
+
+        row = _stream_ledger_response(chunks[-1], provider="openai", model="gpt-4o", latency_ms=1)
+        assert (row.usage.input_tokens, row.usage.output_tokens) == (123, 2), "not 0 and an estimate"
+        assert row.cost_usd == chunks[-1].cost_usd
+
+    @pytest.mark.asyncio
+    async def test_a_route_without_stream_options_streams_exactly_as_before(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+
+        import nvh.providers.openai_compatible as oc
+        from nvh.providers.base import Message
+
+        async def litellm_stream():
+            yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="hi"), finish_reason=None)])
+            yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=""), finish_reason="stop")])
+
+        provider = oc.OpenAICompatibleProvider(oc.PROVIDER_SPECS["openai"])
+        with patch("nvh.providers.openai_compatible.litellm.get_supported_openai_params", return_value=["temperature"]), \
+                patch("nvh.providers.openai_compatible.litellm.acompletion", new=AsyncMock(return_value=litellm_stream())) as ac:
+            chunks = [c async for c in provider.stream([Message(role="user", content="hi")])]
+
+        assert "stream_options" not in ac.await_args.kwargs
+        assert [c.is_final for c in chunks] == [False, True]
+        assert chunks[-1].usage is not None and chunks[-1].usage.input_tokens == 0

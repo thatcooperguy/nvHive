@@ -10,7 +10,10 @@ and the concierge wave's binding rules (docs/proposals/SPARK_CONCIERGE_2026-09.m
     Wizard's read-only core auto tools (``diagnose``, ``refresh_models``,
     ``rag_ask_vault`` — never ``web_search`` / ``repair_workspace``); a
     ``strict-tools`` profile (the core ``vault-rag``) and an explicit pin
-    keep their whitelist exactly.
+    keep their whitelist exactly — plus, on an attended turn, the dialogue
+    tool ``ask_user`` (0.46, O10: it executes nothing). An unattended turn
+    (the schedule runner) offers no dialogue tool and runs only
+    ``tools_allowed`` ∩ ``SCHEDULE_AUTO_TOOLS``.
   - A profile's provider/model pin is advisory: honoured when the provider is
     *available* — registered and, for Ollama, answering a cached ``/api/tags``
     probe (``setup_from_config`` registers Ollama from config whether or not
@@ -92,7 +95,10 @@ _REFRESH = 'TOOL_CALL: {"name": "refresh_models", "arguments": {}}'
 _SAVE_KEY = 'TOOL_CALL: {"name": "save_provider_key", "arguments": {"provider": "groq", "api_key": "gsk_x"}}'
 _DIAGNOSE = 'TOOL_CALL: {"name": "diagnose", "arguments": {}}'
 _APPLY = 'TOOL_CALL: {"name": "system_settings_apply", "arguments": {"setting": "enable_ssh"}}'
-_FULL_CATALOG = ["diagnose", "refresh_models", "save_provider_key", "system_settings_apply", "web_search"]
+_ASK = 'TOOL_CALL: {"name": "ask_user", "arguments": {"question": "Which disk?"}}'
+_FULL_CATALOG = [
+    "ask_user", "diagnose", "refresh_models", "save_provider_key", "system_settings_apply", "web_search",
+]
 
 _LOCAL_ONLY_REASON = "profile_local_only_provider_unavailable"
 
@@ -115,11 +121,14 @@ class _Counter:
 
 @pytest.fixture()
 def fake_registry(monkeypatch) -> tuple[WizardToolRegistry, dict[str, _Counter]]:
-    """Three auto tools (two of them core: diagnose, refresh_models), one
-    confirm tool and one privileged tool, all with counting handlers."""
+    """Three auto tools (two of them core: diagnose, refresh_models), two
+    confirm tools (save_provider_key and the dialogue tool ask_user) and one
+    privileged tool, all with counting handlers."""
     counters = {
         name: _Counter()
-        for name in ("web_search", "refresh_models", "diagnose", "save_provider_key", "system_settings_apply")
+        for name in (
+            "web_search", "refresh_models", "diagnose", "save_provider_key", "ask_user", "system_settings_apply",
+        )
     }
     reg = WizardToolRegistry()
     reg.register(WizardTool(
@@ -137,6 +146,10 @@ def fake_registry(monkeypatch) -> tuple[WizardToolRegistry, dict[str, _Counter]]
     reg.register(WizardTool(
         name="save_provider_key", description="Persist an API key.", safety_class="confirm",
         parameters={"provider": {}, "api_key": {}}, handler=counters["save_provider_key"],
+    ))
+    reg.register(WizardTool(
+        name="ask_user", description="Ask the user one clarifying question.", safety_class="confirm",
+        parameters={"question": {}}, handler=counters["ask_user"],
     ))
     async def _plan_stub(args: dict[str, Any]) -> dict[str, Any]:
         """The dry run the red card shows; runs nothing."""
@@ -413,7 +426,7 @@ async def test_whitelist_filters_prompt_tool_catalog(tmp_path: Path, fake_regist
         await chat_mod.wizard_chat("hi", profile=name, home_dir=tmp_path)
         await chat_mod.wizard_chat("hi", profile="wizard", home_dir=tmp_path)
 
-    assert seen[0] == ["refresh_models"]
+    assert seen[0] == ["ask_user", "refresh_models"]  # the dialogue tool rides on every whitelist (O10)
     assert seen[1] == _FULL_CATALOG
     # The rendered prompt handed to the provider lists only the whitelisted tool.
     first_prompt = engine.registry.get().complete.call_args_list[0].kwargs["system_prompt"]
@@ -684,16 +697,16 @@ async def test_auto_routed_specialist_keeps_core_tools_while_a_pin_stays_strict(
         routed = await chat_mod.wizard_chat("gpus?", home_dir=tmp_path)  # profile=None → concierge
         pinned = await chat_mod.wizard_chat("gpus?", profile=name, home_dir=tmp_path)
 
-    # Concierge-chosen: catalog = whitelist ∪ core tools present in the registry.
-    assert seen[0] == ["diagnose", "refresh_models"]
+    # Concierge-chosen: catalog = whitelist ∪ core tools present in the registry (+ the dialogue tool).
+    assert seen[0] == ["ask_user", "diagnose", "refresh_models"]
     assert routed["used_profile"] == name
     assert routed["profile_reason"] == f"{name}: matched 'broken'"
     assert routed["iterations"] == 2 and routed["answer"] == "Found it."
     assert counters["refresh_models"].calls == [{}]
 
-    # Pinned: strict — rag_ask isn't in this registry, so the catalog is empty
-    # and refresh_models is refused rather than run.
-    assert seen[1] == []
+    # Pinned: strict — rag_ask isn't in this registry, so the catalog is the
+    # dialogue tool alone and refresh_models is refused rather than run.
+    assert seen[1] == ["ask_user"]
     assert pinned["used_profile"] == name and pinned["profile_reason"] is None
     assert pinned["iterations"] == 1
     assert pinned["tool_results"][0]["result"]["not_allowed"] is True
@@ -718,7 +731,7 @@ async def test_core_tool_union_is_read_only_and_never_re_enables_web_search(
     with _patched(engine):
         result = await chat_mod.wizard_chat("latest gpus?", home_dir=tmp_path)
 
-    assert seen[0] == ["diagnose", "refresh_models"]  # web_search is not core
+    assert seen[0] == ["ask_user", "diagnose", "refresh_models"]  # web_search is not core
     assert result["used_profile"] == name
     assert result["iterations"] == 1
     assert [(r["name"], r["result"]["not_allowed"]) for r in result["tool_results"]] == [("web_search", True)]
@@ -745,7 +758,7 @@ async def test_strict_tools_vault_rag_auto_routed_keeps_its_whitelist_exactly(
     with _patched(engine):
         result = await chat_mod.wizard_chat("what did I note about gpus?", home_dir=tmp_path)
 
-    assert seen[0] == []  # rag_ask_vault is not in this registry and nothing was added
+    assert seen[0] == ["ask_user"]  # rag_ask_vault is not in this registry; only the dialogue tool was added (O10)
     assert result["used_profile"] == "vault-rag"
     assert result["profile_reason"] == "vault-rag: matched 'my notes'"
     assert result["iterations"] == 1
@@ -1372,7 +1385,7 @@ async def test_concierge_chosen_local_only_specialist_runs_when_ollama_is_regist
     assert result["mode"] == "llm" and result["answer"] == "from ollama"
     assert result["used_provider"] == "ollama"
     assert result["used_profile"] == name and result["profile_reason"] == f"{name}: matched 'lights'"
-    assert seen[0] == ["diagnose", "refresh_models"]  # whitelist ∪ core, filtered by the registry
+    assert seen[0] == ["ask_user", "diagnose", "refresh_models"]  # whitelist ∪ core (+ dialogue), filtered by the registry
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -2707,3 +2720,194 @@ async def test_demotion_note_says_whether_ollama_is_missing_or_down(
         f"would have been {name}: matched 'lights'"
     )
     assert local_probe.await_count == (1 if registered else 0)
+
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# 0.46: the dialogue tool rides on every whitelist (O10); unattended turns
+# ───────────────────────────────────────────────────────────────────────────
+
+
+def test_effective_whitelist_adds_dialogue_tools_attended_and_the_roster_unattended() -> None:
+    """Attended: a whitelist (strict or not) gains ``ask_user``; ``None`` stays ``None``. Unattended:
+    ``tools_allowed`` ∩ ``SCHEDULE_AUTO_TOOLS`` (the roster itself for ``None``), never a dialogue tool.
+    The roster is derived from the chat module's own sets, every member is auto-class in the stock
+    registry, and it never restarts the daemon or asks a question."""
+    from nvh.integrations.wizard.chat import (
+        DIALOGUE_TOOLS,
+        LOCAL_PROBE_INVALIDATING_TOOLS,
+        SCHEDULE_AUTO_TOOLS,
+        WIZARD_CORE_AUTO_TOOLS,
+        _effective_whitelist,
+    )
+    from nvh.integrations.wizard.tools import default_registry
+
+    assert DIALOGUE_TOOLS == frozenset({"ask_user"})
+    assert _effective_whitelist(None, unattended=False) is None
+    assert _effective_whitelist(frozenset({"rag_ask_vault"}), unattended=False) == frozenset({"rag_ask_vault", "ask_user"})
+    assert _effective_whitelist(frozenset(), unattended=False) == frozenset({"ask_user"})
+    assert _effective_whitelist(None, unattended=True) == SCHEDULE_AUTO_TOOLS
+    assert _effective_whitelist(
+        frozenset({"rag_ask_vault", "refresh_models", "ask_user", "web_search", "save_provider_key"}),
+        unattended=True,
+    ) == frozenset({"rag_ask_vault", "web_search"})
+    assert SCHEDULE_AUTO_TOOLS == (WIZARD_CORE_AUTO_TOOLS - LOCAL_PROBE_INVALIDATING_TOOLS) | {
+        "web_search", "rag_ask", "system_settings_get", "system_settings_plan", "playbook_list", "playbook_plan",
+    }
+    assert "refresh_models" in WIZARD_CORE_AUTO_TOOLS and "refresh_models" not in SCHEDULE_AUTO_TOOLS
+    assert SCHEDULE_AUTO_TOOLS.isdisjoint(LOCAL_PROBE_INVALIDATING_TOOLS)
+    assert SCHEDULE_AUTO_TOOLS.isdisjoint(DIALOGUE_TOOLS)
+    by_name = {t.name: t for t in default_registry().list_tools()}
+    missing = SCHEDULE_AUTO_TOOLS - set(by_name)
+    assert not missing, sorted(missing)
+    assert all(by_name[name].safety_class == "auto" for name in SCHEDULE_AUTO_TOOLS), sorted(SCHEDULE_AUTO_TOOLS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("how", ["strict-auto-routed", "pinned-whitelist"])
+async def test_every_whitelist_sees_and_may_call_ask_user_but_nothing_else_widens(
+    tmp_path: Path, fake_registry, monkeypatch, how: str,
+) -> None:
+    """The strict-tools vault-rag chosen by the concierge and a user profile pinned with
+    ``tools_allowed=["rag_ask_vault"]`` both see ``ask_user`` in their catalog and may call it (one
+    card, nothing executed); web_search stays refused and the turn stops after the question."""
+    from nvh.integrations.wizard import chat as chat_mod
+
+    _reg, counters = fake_registry
+    seen = _catalog_spy(monkeypatch)
+    if how == "strict-auto-routed":
+        name, kwargs = "vault-rag", {}
+        _route_auto_to(monkeypatch, "vault-rag", reason="matched 'my notes'")
+    else:
+        name = _save_profile(tmp_path, "notes-only", tools_allowed=["rag_ask_vault"])
+        kwargs = {"profile": name}
+    engine = _complete_engine([f"One question first.\n{_ASK}\n{_WEB}", "never reached"])
+
+    with _patched(engine):
+        result = await chat_mod.wizard_chat("what did I note about gpus?", home_dir=tmp_path, **kwargs)
+
+    assert seen[0] == ["ask_user"]  # rag_ask_vault is not in this registry; only the dialogue tool is added
+    assert result["used_profile"] == name and result["iterations"] == 1
+    assert result["tool_calls"] == [{"name": "ask_user", "arguments": {"question": "Which disk?"}}]
+    assert [(r["name"], r["result"]["not_allowed"]) for r in result["tool_results"]] == [("web_search", True)]
+    assert counters["ask_user"].calls == [] and counters["web_search"].calls == []
+
+
+@pytest.mark.asyncio
+async def test_unattended_strict_tools_turn_keeps_its_whitelist_and_never_sees_a_question(
+    tmp_path: Path, fake_registry, monkeypatch,
+) -> None:
+    """Unattended, the same strict profile's catalog is empty (rag_ask_vault is not in this registry
+    and the dialogue tool is out), and ``ask_user``, ``refresh_models`` AND the privileged apply are
+    all whitelist refusals: a profile whose whitelist is ``['rag_ask_vault']`` records no request
+    for a tool it may never call, so the run is never marked ``deferred`` for one."""
+    from nvh.integrations.wizard import chat as chat_mod
+
+    _reg, counters = fake_registry
+    seen = _catalog_spy(monkeypatch)
+    engine = _complete_engine([f"Working.\n{_ASK}\n{_APPLY}\n{_REFRESH}", "never reached"])
+
+    with _patched(engine):
+        result = await chat_mod.wizard_chat(
+            "nightly notes", profile="vault-rag", home_dir=tmp_path, unattended=True,
+        )
+
+    assert seen[0] == []
+    assert result["used_profile"] == "vault-rag" and result["iterations"] == 1
+    assert [(r["name"], r["result"]["not_allowed"]) for r in result["tool_results"]] == [
+        ("ask_user", True), ("system_settings_apply", True), ("refresh_models", True),
+    ]
+    assert result["tool_calls"] == []
+    assert "approval_token" not in json.dumps(result, default=str)
+    assert counters["ask_user"].calls == [] and counters["system_settings_apply"].calls == []
+    assert counters["refresh_models"].calls == []
+
+
+@pytest.mark.asyncio
+async def test_unattended_turn_records_a_request_only_for_a_tool_the_profile_allows(
+    tmp_path: Path, fake_registry, monkeypatch,
+) -> None:
+    """A user profile whitelisting ``system_settings_apply`` and ``diagnose``: unattended it runs
+    ``diagnose`` (in the roster), records the privileged apply as ``{name, arguments, privileged,
+    unattended}`` with no plan and no token, and refuses ``save_provider_key`` (not whitelisted)."""
+    from nvh.integrations.wizard import chat as chat_mod
+
+    _reg, counters = fake_registry
+    name = _save_profile(tmp_path, "ops-timer", tools_allowed=["system_settings_apply", "diagnose"])
+    engine = _complete_engine([f"Working.\n{_APPLY}\n{_SAVE_KEY}\n{_DIAGNOSE}", "Done."])
+
+    with _patched(engine):
+        result = await chat_mod.wizard_chat("nightly ops", profile=name, home_dir=tmp_path, unattended=True)
+
+    assert result["used_profile"] == name
+    assert result["tool_calls"] == [{
+        "name": "system_settings_apply", "arguments": {"setting": "enable_ssh"},
+        "privileged": True, "unattended": True,
+    }]
+    assert [(r["name"], r["result"].get("not_allowed", False)) for r in result["tool_results"]] == [
+        ("save_provider_key", True), ("diagnose", False),
+    ]
+    assert counters["diagnose"].calls == [{}] and counters["system_settings_apply"].calls == []
+    assert counters["save_provider_key"].calls == []
+    assert "approval_token" not in json.dumps(result, default=str) and "plan" not in result["tool_calls"][0]
+
+    # The general Wizard (no whitelist) still records every confirm/privileged request, as before.
+    engine = _complete_engine([f"Working.\n{_APPLY}\n{_SAVE_KEY}", "Done."])
+    with _patched(engine):
+        result = await chat_mod.wizard_chat("nightly ops", profile="wizard", home_dir=tmp_path, unattended=True)
+    assert [c["name"] for c in result["tool_calls"]] == ["system_settings_apply", "save_provider_key"]
+    assert all(c["unattended"] is True for c in result["tool_calls"])
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# 0.46: the turn's own provider pin (a schedule's advisor)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_turn_provider_pin_routes_the_turn_like_a_profile_pin(tmp_path: Path, fake_registry) -> None:
+    """``wizard_chat(provider="groq")`` replaces the router's provider when groq is registered, re-resolving
+    the model for it; an unregistered pin keeps the router's choice and says so; a ``local-only``
+    profile keeps its own pin whatever the turn asked."""
+    from nvh.integrations.wizard import chat as chat_mod
+
+    engine = _complete_engine(["ok"])
+    engine.registry.has = MagicMock(side_effect=lambda name: name in {"ollama", "groq"})
+    constrained = MagicMock(provider="groq", model="groq/llama-x")
+
+    def route(query, provider_override=None):
+        return constrained if provider_override == "groq" else engine.router.route.return_value
+
+    decision = engine.router.route.return_value
+    engine.router.route = MagicMock(side_effect=route)
+    engine.router.route.return_value = decision
+    with _patched(engine):
+        await chat_mod.wizard_chat("hi", home_dir=tmp_path, provider="groq")
+    assert decision.provider == "groq" and decision.model == "groq/llama-x"
+
+    engine = _complete_engine(["ok"])
+    engine.registry.has = MagicMock(side_effect=lambda name: name == "ollama")
+    with _patched(engine):
+        await chat_mod.wizard_chat("hi", home_dir=tmp_path, provider="groq")
+    decision = engine.router.route.return_value
+    assert decision.provider == "ollama" and "profile_provider_unavailable: 'groq' is not registered" in decision.reason
+
+    name = _save_profile(tmp_path, "local-notes", tags=["local-only"], provider="ollama")
+    engine = _complete_engine(["ok"])
+    engine.registry.has = MagicMock(return_value=True)
+    with _patched(engine):
+        result = await chat_mod.wizard_chat("hi", profile=name, home_dir=tmp_path, provider="groq")
+    assert result["used_profile"] == name and engine.router.route.return_value.provider == "ollama"
+
+
+def test_with_provider_pin_rules() -> None:
+    from nvh.integrations.wizard.chat import ProfileOverrides, _with_provider_pin
+
+    base = ProfileOverrides(profile_name="p", provider="ollama", model="ollama/x")
+    assert _with_provider_pin(base, None, "t") is base and _with_provider_pin(base, "  ", "t") is base
+    assert _with_provider_pin(base, "ollama", "t") is base  # same provider: the model pin stands
+    pinned = _with_provider_pin(base, "groq", "t")
+    assert pinned.provider == "groq" and pinned.model is None and pinned.profile_name == "p"
+    local = ProfileOverrides(profile_name="l", local_only=True)
+    assert _with_provider_pin(local, "groq", "t") is local
+    assert _with_provider_pin(ProfileOverrides(), "groq", "t").provider == "groq"

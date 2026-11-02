@@ -19,8 +19,12 @@ so we don't depend on any real engine or LLM.
 
 from __future__ import annotations
 
+import json
+import sys
+import types
 from collections.abc import AsyncIterator
 from decimal import Decimal
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -626,3 +630,474 @@ async def test_stream_error_path_logs_the_iterations_that_were_metered() -> None
     assert response.provider == "ollama" and response.model == "ollama/served:1b"
     assert (response.usage.input_tokens, response.usage.output_tokens) == (10, 5)
     assert float(response.cost_usd) == pytest.approx(0.02)
+
+
+
+# ── 0.46: ask_user, confirm cards with plans, unattended turns ───────────────
+
+_ASK = (
+    'TOOL_CALL: {"name": "ask_user", "arguments": '
+    '{"question": "Which disk should hold models?", "choices": ["/mnt/nvme0", "/home"]}}\n'
+)
+_ASK_2 = 'TOOL_CALL: {"name": "ask_user", "arguments": {"question": "And which model size?"}}\n'
+
+
+async def _events(engine: MagicMock, question: str = "set up models", **kw: Any) -> list[dict[str, Any]]:
+    """Every event of one streamed turn against ``engine`` (engine + context patched)."""
+    from nvh.integrations.wizard import chat as chat_mod
+
+    with (
+        patch("nvh.api.server.get_engine", return_value=engine),
+        patch("nvh.integrations.wizard.context.wizard_context", return_value=_EMPTY_SNAPSHOT),
+    ):
+        return [e async for e in chat_mod.wizard_chat_stream(question, **kw)]
+
+
+def _fake_imagegen(monkeypatch) -> dict[str, list[dict[str, Any]]]:
+    """A stand-in ``nvh.integrations.imagegen``: a finite ceiling plans local, none plans hosted.
+
+    Every name here is made up; nothing is a catalog fact.
+    """
+    calls: dict[str, list[dict[str, Any]]] = {"plan": [], "render": []}
+
+    class ImageGenerationUnavailable(RuntimeError):  # noqa: N818 — the C1 contract's name
+        pass
+
+    def plan_image_backend(*, home_dir=None, cost_ceiling_usd=None, requested="auto"):
+        calls["plan"].append({"cost_ceiling_usd": cost_ceiling_usd, "requested": requested})
+        if cost_ceiling_usd is not None:
+            return {
+                "backend": "comfyui", "reason": "", "model": "fake-local", "cost_usd": 0.0, "cost_known": True,
+                "host": "127.0.0.1", "port": 8188,
+                "summary": "local ComfyUI on 127.0.0.1:8188 · $0 · uses GPU memory while it runs",
+            }
+        return {
+            "backend": "nvidia", "reason": "", "model": "fake-hosted", "cost_usd": None, "cost_known": False,
+            "host": None, "port": None, "summary": "NVIDIA-hosted (fake-hosted) · cost unknown",
+        }
+
+    async def render_image(prompt, **kwargs):
+        calls["render"].append({"prompt": prompt, **kwargs})
+        raise AssertionError("a surfaced card never renders in the turn")
+
+    module = types.ModuleType("nvh.integrations.imagegen")
+    module.ImageGenerationUnavailable = ImageGenerationUnavailable  # type: ignore[attr-defined]
+    module.plan_image_backend = plan_image_backend  # type: ignore[attr-defined]
+    module.render_image = render_image  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nvh.integrations.imagegen", module)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_ask_user_surfaces_as_one_card_and_ends_the_turn() -> None:
+    """A deferred ``ask_user`` is exactly one ``confirm_required`` card — no ``tool_result``, no plan,
+    no token — and the turn stops after one iteration although a second response was scripted."""
+    engine = _fake_engine([["I need to know where models go.\n", _ASK], ["never reached"]])
+    events = await _events(engine)
+    kinds = [e["type"] for e in events]
+    assert kinds[-1] == "done" and kinds.count("confirm_required") == 1 and "tool_result" not in kinds
+    assert [(e["name"], e["safety_class"]) for e in events if e["type"] == "tool_call"] == [("ask_user", "confirm")]
+    done = events[-1]
+    assert done["iterations"] == 1 and "never reached" not in done["answer"]
+    assert done["tool_calls"] == [{
+        "name": "ask_user",
+        "arguments": {"question": "Which disk should hold models?", "choices": ["/mnt/nvme0", "/home"]},
+    }]
+    confirm = next(e for e in events if e["type"] == "confirm_required")
+    assert confirm["tool_calls"] == done["tool_calls"]
+    assert done["deferred_tool_calls"] == [] and done["tool_results"] == []
+    assert engine.registry.get.return_value.stream.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_two_ask_user_calls_make_one_card_and_one_question_pending_deferral() -> None:
+    engine = _fake_engine([["Two things.\n", _ASK, _ASK_2], ["never reached"]])
+    events = await _events(engine)
+    done = events[-1]
+    assert done["type"] == "done" and done["iterations"] == 1
+    assert [c["name"] for c in done["tool_calls"]] == ["ask_user"]
+    assert done["tool_calls"][0]["arguments"]["question"] == "Which disk should hold models?"
+    assert done["deferred_tool_calls"] == [{
+        "name": "ask_user", "arguments": {"question": "And which model size?"}, "reason": "question_pending",
+    }]
+    confirm = next(e for e in events if e["type"] == "confirm_required")
+    assert confirm["tool_calls"] == done["tool_calls"]
+
+
+@pytest.mark.asyncio
+async def test_ask_user_plus_an_auto_sibling_is_one_iteration() -> None:
+    """The auto sibling runs and its result is recorded, but the question ends the turn: no second
+    completion to act on an assumption before the answer arrives."""
+    from nvh.integrations.wizard import chat as chat_mod
+
+    real_run = chat_mod._run_auto_tool
+
+    async def run(name, arguments, **kw):
+        if name == "refresh_models":
+            return {"ok": True, "result": {"count": 3}, "safety_class": "auto"}
+        return await real_run(name, arguments, **kw)
+
+    engine = _fake_engine([["Checking.\n", _REFRESH + "\n", _ASK], ["never reached"]])
+    with patch("nvh.integrations.wizard.chat._run_auto_tool", new=AsyncMock(side_effect=run)):
+        events = await _events(engine)
+    done = events[-1]
+    assert done["type"] == "done" and done["iterations"] == 1
+    assert [e["name"] for e in events if e["type"] == "tool_result"] == ["refresh_models"]
+    assert [(e["name"], e["safety_class"]) for e in events if e["type"] == "tool_call"] == [
+        ("refresh_models", "auto"), ("ask_user", "confirm"),
+    ]
+    assert [c["name"] for c in done["tool_calls"]] == ["ask_user"]
+    assert [r["name"] for r in done["tool_results"]] == ["refresh_models"]
+    assert engine.registry.get.return_value.stream.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_call_events_carry_the_registry_safety_class_or_unknown() -> None:
+    engine = _fake_engine([
+        ["Go.\n", _REFRESH + "\n", 'TOOL_CALL: {"name": "no_such_tool", "arguments": {}}\n'],
+        ["Done."],
+    ])
+    with patch(
+        "nvh.integrations.wizard.chat._run_auto_tool",
+        new=AsyncMock(return_value={"ok": True, "result": {}, "safety_class": "auto"}),
+    ):
+        events = await _events(engine)
+    assert [(e["name"], e["safety_class"]) for e in events if e["type"] == "tool_call"] == [
+        ("refresh_models", "auto"), ("no_such_tool", "unknown"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_history_tool_results_render_the_ask_user_answer_line(tmp_path) -> None:
+    """The answer travels twice by design: the user message is authoritative, the ``TOOL_RESULT
+    ask_user`` system line names the question that was answered (or skipped)."""
+    from nvh.integrations.wizard import chat as chat_mod
+
+    answered = 'TOOL_RESULT ask_user: {"ok": true, "summary": "/mnt/nvme0"}'
+    history = [
+        {"role": "user", "content": "set up models"},
+        {
+            "role": "assistant", "content": "Which disk should hold models?",
+            "tool_results": [{"name": "ask_user", "ok": True, "summary": "/mnt/nvme0"}],
+        },
+        {"role": "user", "content": "/mnt/nvme0"},
+    ]
+    with patch("nvh.integrations.wizard.context.wizard_context", return_value=_EMPTY_SNAPSHOT):
+        turn = await chat_mod._prepare_turn(
+            "go ahead", history=history, home_dir=tmp_path, enable_followup=False,
+            profile="wizard", label="test", engine=None,
+        )
+    rendered = [(m.role, m.content) for m in chat_mod._build_messages(turn)]
+    assert ("system", answered) in rendered
+    assert (
+        rendered.index(("assistant", "Which disk should hold models?"))
+        < rendered.index(("system", answered))
+        < rendered.index(("user", "/mnt/nvme0"))
+    )
+    skipped = chat_mod._history_tool_results_message({
+        "tool_results": [{"name": "ask_user", "ok": False, "summary": "skipped by the user; not answered"}],
+    })
+    assert skipped == 'TOOL_RESULT ask_user: {"ok": false, "summary": "skipped by the user; not answered"}'
+
+
+def _planned_registry(monkeypatch, planned: list[dict[str, Any]]):
+    """A registry with one confirm-class tool whose planner records what it was asked to plan."""
+    from nvh.integrations.wizard.tools import WizardTool, WizardToolRegistry
+
+    async def handler(args):
+        return {"ok": True}
+
+    async def planner(args):
+        planned.append(dict(args))
+        return {"ok": True, "commands": [], "summary": f"plan for {args.get('profile')}"}
+
+    reg = WizardToolRegistry()
+    reg.register(WizardTool(
+        name="planned", description="Confirm tool with a dry run.", safety_class="confirm",
+        parameters={"x": {"type": "integer"}}, handler=handler, planner=planner, summary_template="Plan {x}.",
+    ))
+    monkeypatch.setattr("nvh.integrations.wizard.tools.default_registry", lambda **kwargs: reg)
+    return reg
+
+
+@pytest.mark.asyncio
+async def test_confirm_tool_with_a_planner_is_surfaced_with_its_plan_and_the_pinned_profile(monkeypatch) -> None:
+    """The general Wizard turn pins ``profile: "wizard"`` over whatever the model wrote, plans from the
+    pinned arguments and carries the plan on the card — no approval token anywhere."""
+    planned: list[dict[str, Any]] = []
+    _planned_registry(monkeypatch, planned)
+    engine = _fake_engine([[
+        "Planning.\n", 'TOOL_CALL: {"name": "planned", "arguments": {"x": 1, "profile": "evil"}}\n',
+        'TOOL_CALL: {"name": "planned", "arguments": {"x": 1}}\n',
+    ]])
+    events = await _events(engine)
+    done = events[-1]
+    assert done["type"] == "done"
+    assert done["tool_calls"] == [{
+        "name": "planned",
+        "arguments": {"x": 1, "profile": "wizard"},
+        "plan": {"ok": True, "commands": [], "summary": "plan for wizard", "pinned_arguments": {"profile": "wizard"}},
+    }]
+    assert planned == [{"x": 1, "profile": "wizard"}]  # the re-emitted call de-duplicated against the pin
+    assert "approval_token" not in json.dumps(done, default=str)
+
+
+@pytest.mark.asyncio
+async def test_whitelisted_profile_ceiling_pins_the_real_profile_and_plans_the_local_backend(
+    monkeypatch, tmp_path,
+) -> None:
+    """A model that writes ``profile: null`` does not get the hosted path: the card carries the turn's
+    profile and the plan (the pinned ceiling against an unknown hosted price) is the local backend."""
+    from nvh.integrations.wizard.profiles import AgentProfile, save_user_profile
+
+    monkeypatch.setenv("NVH_HOME", str(tmp_path))
+    save_user_profile(AgentProfile(
+        name="artist", title="Artist", description="", system_prompt="You draw.",
+        tools_allowed=["generate_image"], max_cost_usd_per_turn=0.05,
+    ), home_dir=tmp_path)
+    calls = _fake_imagegen(monkeypatch)
+    engine = _fake_engine([[
+        "Rendering.\n",
+        'TOOL_CALL: {"name": "generate_image", "arguments": {"prompt": "a hero image", "profile": null}}\n',
+    ]])
+    events = await _events(engine, "make me a hero image", profile="artist")
+    done = events[-1]
+    assert done["type"] == "done" and done["used_profile"] == "artist"
+    [card] = done["tool_calls"]
+    assert card["name"] == "generate_image"
+    assert card["arguments"] == {"prompt": "a hero image", "profile": "artist"}
+    assert card["plan"]["backend"] == "comfyui" and card["plan"]["cost_known"] is True
+    assert card["plan"]["pinned_arguments"] == {"profile": "artist"}
+    assert card["plan"]["summary"].startswith("local ComfyUI")
+    assert calls["plan"] == [{"cost_ceiling_usd": 0.05, "requested": "auto"}] and calls["render"] == []
+    assert "approval_token" not in json.dumps(done, default=str)
+
+
+@pytest.mark.asyncio
+async def test_unattended_turn_drops_ask_user_and_never_mints_a_token(monkeypatch) -> None:
+    """The schedule runner's turn: the catalog is the derived read-only roster (no ``ask_user``, no
+    ``refresh_models``), a confirm or privileged request is recorded without a plan or token and
+    ``execute(confirmed=False)`` is never called, the question and the daemon restart are refused."""
+    from nvh.integrations.wizard import personality
+    from nvh.integrations.wizard.tools import WizardTool, WizardToolRegistry
+
+    async def ok(args):
+        return {"ran": True}
+
+    async def planner(args):
+        raise AssertionError("an unattended turn never plans")
+
+    reg = WizardToolRegistry()
+    for name in ("diagnose", "web_search", "refresh_models", "rag_ask_vault"):
+        reg.register(WizardTool(name=name, description=name, safety_class="auto", parameters={}, handler=ok))
+    reg.register(WizardTool(
+        name="ask_user", description="Ask.", safety_class="confirm", parameters={"question": {}}, handler=ok,
+    ))
+    reg.register(WizardTool(name="save_provider_key", description="Save.", safety_class="confirm", parameters={}, handler=ok))
+    reg.register(WizardTool(
+        name="system_settings_apply", description="Apply.", safety_class="privileged",
+        parameters={"setting": {}}, handler=ok, planner=planner,
+    ))
+    monkeypatch.setattr("nvh.integrations.wizard.tools.default_registry", lambda **kwargs: reg)
+
+    executed: list[tuple[str, bool]] = []
+    real_execute = reg.execute
+
+    async def spy(name, arguments=None, *, confirmed=False, approval_token=None):
+        executed.append((name, confirmed))
+        return await real_execute(name, arguments, confirmed=confirmed, approval_token=approval_token)
+
+    monkeypatch.setattr(reg, "execute", spy)
+    shown: list[list[str]] = []
+    real_build = personality.build_system_prompt
+
+    def spy_build(context, tools=None, **kw):
+        shown.append(sorted(t["name"] for t in (tools or [])))
+        return real_build(context, tools=tools, **kw)
+
+    monkeypatch.setattr("nvh.integrations.wizard.personality.build_system_prompt", spy_build)
+
+    engine = _fake_engine([
+        [
+            "Doing it all.\n",
+            'TOOL_CALL: {"name": "system_settings_apply", "arguments": {"setting": "enable_ssh"}}\n',
+            'TOOL_CALL: {"name": "save_provider_key", "arguments": {"provider": "groq", "api_key": "gsk_x"}}\n',
+            _ASK,
+            _REFRESH + "\n",
+            'TOOL_CALL: {"name": "diagnose", "arguments": {}}\n',
+        ],
+        ["Done."],
+    ])
+    events = await _events(engine, "nightly check", unattended=True)
+    done = events[-1]
+    assert done["type"] == "done" and done["iterations"] == 2
+    assert shown == [["diagnose", "rag_ask_vault", "web_search"]]
+    assert done["tool_calls"] == [
+        {"name": "system_settings_apply", "arguments": {"setting": "enable_ssh"}, "privileged": True, "unattended": True},
+        {
+            "name": "save_provider_key", "arguments": {"provider": "groq", "api_key": "gsk_x"},
+            "privileged": False, "unattended": True,
+        },
+    ]
+    refused = [r["name"] for r in done["tool_results"] if r["result"].get("not_allowed")]
+    assert refused == ["ask_user", "refresh_models"]
+    assert [r["name"] for r in done["tool_results"] if r["result"].get("ok")] == ["diagnose"]
+    assert executed == [("diagnose", True)]
+
+
+def _question_and_action_registry(monkeypatch):
+    """``ask_user`` (confirm) beside a privileged tool with a planner, both spied."""
+    from nvh.integrations.wizard.tools import WizardTool, WizardToolRegistry
+
+    seen: dict[str, list[Any]] = {"planned": [], "executed": []}
+
+    async def ok(args):
+        return {"ran": True}
+
+    async def planner(args):
+        seen["planned"].append(dict(args))
+        return {"ok": True, "commands": ["sudo cleanup D:"], "sudo": True}
+
+    reg = WizardToolRegistry()
+    reg.register(WizardTool(
+        name="ask_user", description="Ask.", safety_class="confirm", parameters={"question": {}}, handler=ok,
+    ))
+    reg.register(WizardTool(
+        name="system_settings_apply", description="Apply.", safety_class="privileged",
+        parameters={"target": {}}, handler=ok, planner=planner,
+    ))
+    reg.register(WizardTool(name="diagnose", description="d", safety_class="auto", parameters={}, handler=ok))
+    monkeypatch.setattr("nvh.integrations.wizard.tools.default_registry", lambda **kwargs: reg)
+    real_execute = reg.execute
+
+    async def spy(name, arguments=None, *, confirmed=False, approval_token=None):
+        seen["executed"].append((name, confirmed))
+        return await real_execute(name, arguments, confirmed=confirmed, approval_token=approval_token)
+
+    monkeypatch.setattr(reg, "execute", spy)
+    return reg, seen
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("question_first", [True, False])
+async def test_a_privileged_sibling_of_a_question_is_held_not_minted(monkeypatch, question_first: bool) -> None:
+    """One iteration emits ``ask_user("C: or D:?")`` and ``system_settings_apply(target="D:")``: the
+    question is the only card. The apply — an action the model made conditional on an unanswered
+    question — lands in ``deferred_tool_calls`` as ``question_pending``: no plan, no red card, no
+    approval token minted (``execute(confirmed=False)`` never runs), whatever the order."""
+    _reg, seen = _question_and_action_registry(monkeypatch)
+    ask = 'TOOL_CALL: {"name": "ask_user", "arguments": {"question": "Which disk should I free: C: or D:?"}}\n'
+    apply = 'TOOL_CALL: {"name": "system_settings_apply", "arguments": {"target": "D:"}}\n'
+    lines = [ask, apply] if question_first else [apply, ask]
+    engine = _fake_engine([["Let me check.\n", *lines], ["never reached"]])
+    events = await _events(engine, "free some disk space", profile="wizard")  # the general Wizard, no whitelist
+    done = events[-1]
+    assert done["type"] == "done" and done["iterations"] == 1
+    assert done["tool_calls"] == [{
+        "name": "ask_user", "arguments": {"question": "Which disk should I free: C: or D:?"},
+    }]
+    assert done["deferred_tool_calls"] == [{
+        "name": "system_settings_apply", "arguments": {"target": "D:"}, "reason": "question_pending",
+    }]
+    confirm = next(e for e in events if e["type"] == "confirm_required")
+    assert confirm["tool_calls"] == done["tool_calls"]
+    assert seen["planned"] == [] and seen["executed"] == []
+    assert "approval_token" not in json.dumps(events, default=str)
+
+
+@pytest.mark.asyncio
+async def test_the_defer_path_holds_the_action_beside_a_question_too(monkeypatch) -> None:
+    """With follow-up off the calls take the defer path (``_defer_calls_to_ui``) and the same rule
+    applies: the question is the card, the apply beside it is held as ``question_pending``."""
+    _reg, seen = _question_and_action_registry(monkeypatch)
+    from nvh.integrations.wizard import chat as chat_mod
+
+    engine = _fake_engine([[
+        "Checking.\n",
+        'TOOL_CALL: {"name": "ask_user", "arguments": {"question": "Which one?"}}\n',
+        'TOOL_CALL: {"name": "system_settings_apply", "arguments": {"target": "D:"}}\n',
+    ]])
+    with (
+        patch("nvh.api.server.get_engine", return_value=engine),
+        patch("nvh.integrations.wizard.context.wizard_context", return_value=_EMPTY_SNAPSHOT),
+    ):
+        events = [e async for e in chat_mod.wizard_chat_stream("free space", profile="wizard", enable_followup=False)]
+    done = events[-1]
+    assert [c["name"] for c in done["tool_calls"]] == ["ask_user"]
+    assert done["deferred_tool_calls"] == [{
+        "name": "system_settings_apply", "arguments": {"target": "D:"}, "reason": "question_pending",
+    }]
+    assert seen["planned"] == [] and seen["executed"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_profile_from_the_requests_home_dir_is_pinned_with_its_home(monkeypatch, tmp_path) -> None:
+    """``POST /v1/wizard/chat {home_dir, profile}``: the chat resolved ``artist`` from the request's
+    home, so the card pins ``profile_home`` beside ``profile`` and the handler's plan reads the same
+    profile's ceiling (local backend) instead of refusing a profile the process home never had."""
+    from nvh.integrations.wizard.profiles import AgentProfile, get_profile, save_user_profile
+
+    req_home = tmp_path / "mnt-vol"
+    save_user_profile(AgentProfile(
+        name="artist", title="Artist", description="", system_prompt="You draw.",
+        tools_allowed=["generate_image"], max_cost_usd_per_turn=0.05,
+    ), home_dir=req_home)
+    assert get_profile("artist") is None, "the process home (conftest's hermetic NVH_HOME) has no artist"
+    calls = _fake_imagegen(monkeypatch)
+    engine = _fake_engine([[
+        "Rendering.\n",
+        'TOOL_CALL: {"name": "generate_image", "arguments": {"prompt": "a hero image"}}\n',
+    ]])
+    events = await _events(engine, "make me a hero image", profile="artist", home_dir=req_home)
+    done = events[-1]
+    assert done["type"] == "done" and done["used_profile"] == "artist"
+    [card] = done["tool_calls"]
+    assert card["arguments"] == {"prompt": "a hero image", "profile": "artist", "profile_home": str(req_home)}
+    assert card["plan"]["pinned_arguments"] == {"profile": "artist", "profile_home": str(req_home)}
+    assert card["plan"]["backend"] == "comfyui" and card["plan"]["ok"] is True
+    assert calls["plan"] == [{"cost_ceiling_usd": 0.05, "requested": "auto"}] and calls["render"] == []
+    # The handler side of the same pin: the ceiling resolves through the pinned home, and Run would too.
+    from nvh.integrations.wizard.tools import _image_profile_ceiling
+
+    assert _image_profile_ceiling("artist") == (False, None)
+    assert _image_profile_ceiling("artist", home_dir=str(req_home)) == (True, 0.05)
+
+
+@pytest.mark.asyncio
+async def test_unattended_records_redact_secrets_and_only_whitelisted_tools(monkeypatch, tmp_path) -> None:
+    """A recorded unattended request carries no key — ``api_key`` is redacted in the envelope — and a
+    profile with a whitelist records only the confirm/privileged tools it allows; the rest are
+    whitelist refusals, as with a human present."""
+    from nvh.integrations.wizard.profiles import AgentProfile, save_user_profile
+    from nvh.integrations.wizard.tools import WizardTool, WizardToolRegistry
+
+    monkeypatch.setenv("NVH_HOME", str(tmp_path))
+    save_user_profile(AgentProfile(
+        name="timer", title="Timer", description="", system_prompt="", tools_allowed=["diagnose", "remember"],
+    ), home_dir=tmp_path)
+
+    async def ok(args):
+        return {"ran": True}
+
+    reg = WizardToolRegistry()
+    reg.register(WizardTool(name="diagnose", description="d", safety_class="auto", parameters={}, handler=ok))
+    reg.register(WizardTool(name="remember", description="r", safety_class="confirm", parameters={}, handler=ok))
+    reg.register(WizardTool(name="save_provider_key", description="s", safety_class="confirm", parameters={}, handler=ok))
+    monkeypatch.setattr("nvh.integrations.wizard.tools.default_registry", lambda **kwargs: reg)
+    key = "gsk_" + "Ab12Cd34" * 4
+    engine = _fake_engine([[
+        "Saving.\n",
+        'TOOL_CALL: {"name": "remember", "arguments": {"title": "key", "body": "the groq key is ' + key + '"}}\n',
+        'TOOL_CALL: {"name": "save_provider_key", "arguments": {"provider": "groq", "api_key": "' + key + '"}}\n',
+    ], ["Done."]])
+    events = await _events(engine, "nightly", profile="timer", home_dir=tmp_path, unattended=True)
+    done = events[-1]
+    assert done["type"] == "done" and done["used_profile"] == "timer"
+    assert done["tool_calls"] == [{
+        "name": "remember", "arguments": {"title": "key", "body": "the groq key is [REDACTED:groq_key]"},
+        "privileged": False, "unattended": True,
+    }]
+    assert [(r["name"], r["result"]["not_allowed"]) for r in done["tool_results"]] == [("save_provider_key", True)]
+    assert key not in json.dumps(done["tool_calls"], default=str)
+    assert "approval_token" not in json.dumps(done, default=str)
+    assert "ask_user" not in json.dumps([e for e in events if e["type"] == "confirm_required"])

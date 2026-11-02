@@ -64,6 +64,7 @@ __all__ = [
     "model_ids_from_payload",
     "model_served",
     "models_probe_request",
+    "supports_stream_usage",
 ]
 
 logger = logging.getLogger(__name__)
@@ -263,6 +264,34 @@ def _wire_partial_calls(partial: dict[int, dict[str, Any]]) -> list[dict[str, An
     """The assembled stream deltas (by index) as wire dicts, through the one mapping."""
     calls = wire_tool_calls(normalize_tool_calls([entry for _index, entry in sorted(partial.items())]))
     return calls or None
+
+
+def supports_stream_usage(model: str) -> bool:
+    """Does LiteLLM say the route ``model`` takes ``stream_options`` (``include_usage``)?
+
+    Read from ``litellm.get_supported_openai_params`` — LiteLLM's own
+    per-provider parameter table, in-package, no network — never from a list
+    of provider names kept here. A model LiteLLM cannot place, or a table
+    lookup that raises, answers ``False`` and the stream is requested exactly
+    as before. Cheap enough to ask per call (a dict walk), and uncached so a
+    patched table is seen at once.
+    """
+    if not model:
+        return False
+    try:
+        params = litellm.get_supported_openai_params(model=model)
+    except Exception:
+        return False
+    return bool(params) and "stream_options" in params
+
+
+def _usage_from(usage_data: Any) -> Usage:
+    """A LiteLLM ``usage`` object (``prompt_tokens`` / ``completion_tokens`` / ``total_tokens``) as :class:`Usage`."""
+    return Usage(
+        input_tokens=getattr(usage_data, "prompt_tokens", 0) or 0,
+        output_tokens=getattr(usage_data, "completion_tokens", 0) or 0,
+        total_tokens=getattr(usage_data, "total_tokens", 0) or 0,
+    )
 
 
 def _responses_content(role: str, content: Any) -> Any:
@@ -903,6 +932,18 @@ class OpenAICompatibleProvider:
         # carries them assembled.
         partial_calls: dict[int, dict[str, Any]] = {}
         emitted_final = False
+        # ``stream_options={"include_usage": True}`` when LiteLLM says the
+        # route takes it: the provider then sends one usage-only trailer
+        # (``choices: []``) after the finish chunk, and the final StreamChunk
+        # waits for it so the ledger row carries real prompt tokens instead
+        # of 0 and an estimate. A caller's own ``stream_options`` wins.
+        if "stream_options" not in kwargs and supports_stream_usage(model_name):
+            kwargs["stream_options"] = {"include_usage": True}
+        want_usage = bool(
+            isinstance(kwargs.get("stream_options"), dict)
+            and kwargs["stream_options"].get("include_usage")
+        )
+        pending_final: StreamChunk | None = None
 
         try:
             response = await litellm.acompletion(
@@ -920,14 +961,29 @@ class OpenAICompatibleProvider:
 
         try:
             async for chunk in response:
+                if emitted_final:
+                    # Nothing after the finish chunk is content: the usage-only
+                    # trailer we asked for, or noise. Release the held final
+                    # chunk when the trailer arrives; never yield a stray chunk
+                    # after ``is_final``.
+                    usage_data = getattr(chunk, "usage", None)
+                    if pending_final is not None and usage_data:
+                        usage = _usage_from(usage_data)
+                        yield pending_final.model_copy(
+                            update={"usage": usage, "cost_usd": self._cost(model_name, usage)},
+                        )
+                        pending_final = None
+                    continue
+
                 delta = ""
                 finish_reason = None
 
-                if chunk.choices and chunk.choices[0].delta:
-                    delta = chunk.choices[0].delta.content or ""
-                    _merge_tool_call_delta(partial_calls, getattr(chunk.choices[0].delta, "tool_calls", None))
-                if chunk.choices and chunk.choices[0].finish_reason:
-                    fr = chunk.choices[0].finish_reason
+                choices = getattr(chunk, "choices", None)
+                if choices and choices[0].delta:
+                    delta = choices[0].delta.content or ""
+                    _merge_tool_call_delta(partial_calls, getattr(choices[0].delta, "tool_calls", None))
+                if choices and choices[0].finish_reason:
+                    fr = choices[0].finish_reason
                     finish_reason = _FINISH_REASONS.get(fr, FinishReason.STOP)
 
                 accumulated += delta
@@ -940,21 +996,18 @@ class OpenAICompatibleProvider:
                     # Estimate usage for streaming (not all providers send it)
                     usage_data = getattr(chunk, "usage", None)
                     if usage_data:
-                        usage = Usage(
-                            input_tokens=getattr(usage_data, "prompt_tokens", 0) or 0,
-                            output_tokens=getattr(usage_data, "completion_tokens", 0) or 0,
-                            total_tokens=getattr(usage_data, "total_tokens", 0) or 0,
-                        )
-                    else:
+                        usage = _usage_from(usage_data)
+                    elif not want_usage:
                         est_out = self.estimate_tokens(accumulated)
                         usage = Usage(
                             input_tokens=0,
                             output_tokens=est_out,
                             total_tokens=est_out,
                         )
-                    cost = self._cost(model_name, usage)
+                    if usage is not None:
+                        cost = self._cost(model_name, usage)
 
-                yield StreamChunk(
+                final_chunk = StreamChunk(
                     delta=delta,
                     is_final=is_final,
                     accumulated_content=accumulated,
@@ -965,8 +1018,23 @@ class OpenAICompatibleProvider:
                     finish_reason=finish_reason,
                     tool_calls=_wire_partial_calls(partial_calls) if is_final else None,
                 )
+                if is_final and usage is None:
+                    # The finish chunk carried no usage and we asked for the
+                    # trailer: hold the final chunk until it arrives.
+                    pending_final = final_chunk
+                    continue
+                yield final_chunk
         except Exception as e:
             raise _map_error(e, self._provider_name) from e
+
+        if pending_final is not None:
+            # Asked for the trailer, never got one: finish with the estimate,
+            # exactly what a provider that sends no usage has always produced.
+            est_out = self.estimate_tokens(accumulated)
+            usage = Usage(input_tokens=0, output_tokens=est_out, total_tokens=est_out)
+            yield pending_final.model_copy(
+                update={"usage": usage, "cost_usd": self._cost(model_name, usage)},
+            )
 
         if partial_calls and not emitted_final:
             # The provider streamed tool calls but never a finish_reason:

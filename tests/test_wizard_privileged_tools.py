@@ -1410,6 +1410,31 @@ async def test_chat_surfaces_a_privileged_call_with_its_card(monkeypatch, tmp_pa
     assert "plan" not in off and "approval_token" not in off
 
 
+@pytest.mark.asyncio
+async def test_unattended_surfacing_records_the_call_and_mints_nothing() -> None:
+    """Design §6: on an unattended turn ``_surfaced_call`` never calls ``execute(confirmed=False)`` —
+    no plan, no token — and records privileged and confirm calls as ``{name, arguments, privileged,
+    unattended}``; attended, the same call still gets its red card."""
+    from nvh.integrations.wizard.chat import _surface_confirm_calls, _surfaced_call
+
+    reg, handler, planner = _stub_registry()
+    call = {"name": "stub_priv", "arguments": {"setting": "enable_ssh"}}
+    surfaced = await _surfaced_call(call, reg, unattended=True)
+    assert surfaced == {
+        "name": "stub_priv", "arguments": {"setting": "enable_ssh"}, "privileged": True, "unattended": True,
+    }
+    confirm = await _surfaced_call({"name": "stub_confirm", "arguments": {}}, reg, unattended=True)
+    assert confirm == {"name": "stub_confirm", "arguments": {}, "privileged": False, "unattended": True}
+    assert planner.calls == [] and handler.calls == []
+    pending: list[dict[str, Any]] = []
+    await _surface_confirm_calls(pending, [call, dict(call)], reg, unattended=True)
+    assert pending == [surfaced]
+    assert "approval_token" not in json.dumps(pending)
+    attended = await _surfaced_call(call, reg)
+    assert attended["privileged"] is True and "approval_token" in attended and "unattended" not in attended
+    assert planner.calls == [{"setting": "enable_ssh"}]
+
+
 def test_persisted_metadata_drops_approval_tokens() -> None:
     from nvh.integrations.wizard.chat import _persistable_calls
 

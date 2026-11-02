@@ -1854,6 +1854,10 @@ SPECIALIST_RULES: tuple[SpecialistRule, ...] = (
             r"(?:^|\n)\s*(?:please\s+)?(?:remember|note|jot|log|save|capture|write)"
             r"\s+(?:this|that|down|it)\b",
         ),
+        # The coach recalls (rag_ask_vault) and, since 0.46, keeps what the
+        # user asks it to keep (remember — the confirm card shows the note).
+        # A user override of this profile without both tools drops the rule.
+        requires_tools=("rag_ask_vault", "remember"),
         weight=1.0,
     ),
     SpecialistRule(

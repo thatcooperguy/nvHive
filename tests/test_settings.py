@@ -347,3 +347,49 @@ class TestSettingsDefaults:
         # Loading with a nonexistent profile should fall back to defaults
         config = load_config(profile="nonexistent_profile_xyz")
         assert config is not None
+
+
+class TestBudgetHourlyRate:
+    """``budget.hourly_rate_usd`` (0.46 §7): what the desktop costs its owner per hour.
+
+    Optional, never guessed: ``None`` by default, parsed from YAML (``nvh config
+    set budget.hourly_rate_usd 2.10`` writes a float), negative values refused,
+    and the generated template documents it as a commented row so a fresh
+    config still parses to ``None``.
+    """
+
+    def test_defaults_to_none(self) -> None:
+        from nvh.config.settings import BudgetConfig
+
+        assert BudgetConfig().hourly_rate_usd is None
+        assert CouncilConfig().budget.hourly_rate_usd is None
+
+    def test_parses_from_yaml(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text("version: '1'\nbudget:\n  hourly_rate_usd: 2.10\n", encoding="utf-8")
+        with patch("nvh.config.settings._find_project_config", return_value=None):
+            cfg = load_config(config_path=cfg_file)
+        assert cfg.budget.hourly_rate_usd == Decimal("2.1")
+        # ``nvh config set`` round-trips through model_dump(): the value survives a save.
+        reloaded_path = save_config(cfg, tmp_path / "out.yaml")
+        with patch("nvh.config.settings._find_project_config", return_value=None):
+            reloaded = load_config(config_path=reloaded_path)
+        assert reloaded.budget.hourly_rate_usd == Decimal("2.1")
+
+    def test_zero_is_allowed_and_negative_is_refused(self) -> None:
+        from pydantic import ValidationError
+
+        from nvh.config.settings import BudgetConfig
+
+        assert BudgetConfig(hourly_rate_usd=Decimal("0")).hourly_rate_usd == Decimal("0")
+        with pytest.raises(ValidationError):
+            BudgetConfig(hourly_rate_usd=Decimal("-0.01"))
+
+    def test_default_template_documents_the_rate_as_a_comment(self) -> None:
+        text = generate_default_config()
+        assert "# hourly_rate_usd: 2.10" in text
+        parsed = yaml.safe_load(text)
+        assert "hourly_rate_usd" not in parsed["budget"], "a comment, not a value: the default stays None"
+        assert set(parsed["budget"]) == {
+            "daily_limit_usd", "monthly_limit_usd", "alert_threshold", "hard_stop", "degrade_on_limit",
+        }

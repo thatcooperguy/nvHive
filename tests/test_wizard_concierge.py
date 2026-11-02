@@ -2426,6 +2426,30 @@ def test_routing_probe(q, which, expected, neutral_classifier) -> None:
     assert c.confidence >= 0.5, (q, c.confidence)
 
 
+def test_daily_notes_coach_rule_requires_remember_and_only_that_persona_files(tmp_path) -> None:
+    """0.46: the coach's rule binds ``rag_ask_vault`` and ``remember``; its catalog row carries both,
+    the drafting personas (vault-gardener, zettelkasten-clerk) and the strict vault-rag do not, the
+    capture phrase still routes to the shipped coach, and a row without ``remember`` drops the rule."""
+    import json
+    from pathlib import Path
+
+    from nvh.integrations.wizard.profiles import get_profile, list_profiles
+
+    assert _rule("daily-notes-coach").requires_tools == ("rag_ask_vault", "remember")
+    catalog = Path(__file__).resolve().parents[1] / "nvh" / "catalog" / "agent-library.json"
+    rows = {p["name"]: p for p in json.loads(catalog.read_text(encoding="utf-8"))["profiles"]}
+    assert rows["daily-notes-coach"]["tools_allowed"] == ["rag_ask_vault", "remember"]
+    assert "use `remember`; the card shows them the note before it is saved" in rows["daily-notes-coach"]["system_prompt"]
+    for name in ("vault-gardener", "zettelkasten-clerk"):
+        assert "remember" not in rows[name]["tools_allowed"], name
+    assert "remember" not in (get_profile("vault-rag", home_dir=tmp_path).tools_allowed or [])
+    question = "remember this: the docker group fix is usermod -aG docker $USER"
+    shipped = select_specialist(question, profiles=list_profiles(home_dir=tmp_path), context=_ctx())
+    assert shipped.profile == "daily-notes-coach"
+    without = _profiles(*RULE_PROFILES, **{"daily-notes-coach": {"tools_allowed": ["rag_ask_vault"]}})
+    assert _pick(question, profiles=without).profile != "daily-notes-coach"
+
+
 def test_routing_probe_covers_the_surface() -> None:
     assert len(ROUTING_PROBE) == 96
     assert len({q for q, _, _ in ROUTING_PROBE}) == 96
