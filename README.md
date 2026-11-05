@@ -2,9 +2,9 @@
 
 # nvHive
 
-**One curl command turns a rented Linux GPU desktop into a working AI lab.**
+**Turn an NVIDIA machine you rent or own into a working AI lab with one command.**
 
-No root. No Docker. Survives reconnects.
+No root. No Docker. Nothing lost on reconnect.
 
 [![PyPI](https://img.shields.io/pypi/v/nvhive)](https://pypi.org/project/nvhive/)
 [![License: PolyForm NC](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue)](LICENSE)
@@ -16,97 +16,60 @@ No root. No Docker. Survives reconnects.
 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
 ```
 
-Works on any rented NVIDIA GPU desktop — RunPod, Lambda, Vast, … — or your own DGX Spark, anywhere you can open a terminal on an NVIDIA machine. A few minutes later your browser opens on a dashboard where everything already works:
+On a Linux desktop session use [`start-linux.sh`](docs/GETTING_STARTED.md#desktop-session-click-first); Windows and macOS are best-effort ([Getting Started](docs/GETTING_STARTED.md)). Already have Python 3.11+? `pip install nvhive` — the published release follows the tags, this repository is ahead of it.
 
-- **A local LLM picked for your GPU's VRAM** — chat and image understanding with nothing leaving the machine
-- **An AI Wizard that knows your workspace** — reads live GPU/service state, fixes problems, RAGs over your files, searches the web
-- **A router across local and cloud providers** — free tiers first when you have no keys, your GPU first when you do
-- **Storage that survives resets** — models, chats, and config live on the persistent volume
+## What happens next
 
-The browser only opens after every service passes a health check — including a real end-to-end test where the Wizard answers a message. You pay for GPU time, not debugging time.
+1. The installer picks a home that survives resets (`NVH_HOME`, your persistent volume when it finds one) and shows the ports it will use.
+2. It reads your GPU and pulls a local model that fits it. You can skip the pull and use the free cloud tier instead.
+3. Ollama, the API and the WebUI each come up and pass a health check — including a real end-to-end answer — before your browser opens.
+4. You ask your first question in the chat. No key, no model choice, no setting needed.
 
-![Model Manager — every model shows whether it fits your GPU before you download](docs/screenshots/model-manager.png)
+![The chat home — the Wizard, your model, and the session's cost in one line](docs/screenshots/model-manager.png)
+<!-- S4: replace with a 1440x900 capture of the chat home after the shell merge (S2); the Model Manager image is a placeholder that exists today. -->
 
-## What's inside
+## What you get
 
-**Model Manager.** nvHive detected your GPU at install, so every model in the catalog shows a *fits-your-GPU* verdict and disk size **before** you download. One-click install with live progress, or `nvh models pull gemma3:4b` from the terminal. [Guide →](docs/MODELS.md)
+**A chat that knows the machine.** The Wizard reads live GPU and service state, runs safe repairs, ingests files you drop in (PDFs included), searches the web and cites it. It asks you a question when it needs one, remembers notes into your vault, generates images, and takes dictation from a hold-to-talk mic with Read aloud for its replies. Every answer shows cost and latency. [Web UI →](docs/WEBUI.md)
 
-**AI Wizard.** A streaming, tool-using assistant grounded in live workspace state. It can refresh models, run safe repairs, ingest files you drag into chat (PDFs included), and cite web sources — showing cost and latency per response. Attach external [MCP tool servers](docs/INTEGRATIONS.md#nvhive-as-an-mcp-client) and their tools join its toolset. Since 0.46 it asks you a question when it needs one, remembers notes into your vault, generates images, and takes dictation from a hold-to-talk mic (with Read aloud for its replies); scheduled prompts have their own page, `/schedules` (an `ask` schedule is an unattended Wizard turn), and every page's top bar shows the session's cost against your hourly desktop rate; `nvh launch <tool>` connects Claude Code, Codex, opencode, Cursor or Continue to it — the MCP server for Claude Code, a printed snippet for the others. [nvh launch →](docs/INTEGRATIONS.md#nvh-launch)
+**Models that fit before you download.** Every model in the catalog carries a fits-your-GPU verdict and its size. One click installs with live progress, or `nvh models pull <tag>`. [Models →](docs/MODELS.md)
 
-**Agent Library and council mode.** 106 agent profiles grouped by category — coding, research, creative, GPU media, ops, smart home, first-run setup — each mappable to a local or cloud model. Council mode runs one question through multiple models in parallel and synthesizes the answers: `nvh convene "Redis or Postgres for session storage?"`. [Cabinets →](docs/CONFIGURATION.md#council-cabinets)
+**Memory that survives.** Conversations, notes and files live server-side under `NVH_HOME`; pin a thread and it is waiting after a reconnect; `nvh snapshot save` / `restore` moves everything to a new machine. [Configuration →](docs/CONFIGURATION.md)
 
-![Agent Library — built-in agent profiles grouped by category](docs/screenshots/agent-library.png)
+**Automations.** Scheduled prompts with their own page, an agent library grouped by category, and council mode that runs one question through several models and synthesises the answers (`nvh convene "…"`). [Commands →](docs/COMMANDS.md)
 
-**Chat history that survives.** Conversations persist server-side, browsable and resumable from every page. Pin one and it's waiting for you after a reconnect.
+**Doors for builders.** OpenAI- and Anthropic-compatible paths on the same port, an MCP server and client, and `nvh launch <tool>` to point Claude Code, Codex, opencode, Cursor or Continue at it. [Integrations →](docs/INTEGRATIONS.md) · [Providers →](docs/PROVIDERS.md)
 
-**Studio packs.** Rootless one-command installs for ComfyUI, Blender, game-dev tooling, and music production: `nvh studio --install comfy -y`.
+## Who it is for
 
-**Spark playbooks.** On a DGX Spark the Wizard runs NVIDIA's install playbooks as approved, audited plans: every `sudo` command is shown on a red card before anything runs, when sudo needs a password the run stops and hands you the one command to run in your own terminal (`nvh playbook install <id>`), and `NVH_ALLOW_PRIVILEGED=0` switches the privileged tools off. The playbooks are extracted from the upstream READMEs and have not yet been exercised by maintainers on DGX Spark hardware. [Spark playbooks →](docs/GETTING_STARTED.md#spark-playbooks)
-
-**Built for machines that disappear.** Everything lives under `NVH_HOME` on the persistent volume. Downloads run as resumable jobs. `nvh snapshot save` / `restore` moves your whole state to a brand-new VM. If your persistent mount isn't auto-detected: `export NVH_HOME=/mnt/persist/nvhive` before installing.
+Rented NVIDIA GPU desktops (RunPod, Lambda, Vast and the like) and NVIDIA's own DGX Spark. On a Spark the Wizard can run NVIDIA's install playbooks as approved, audited plans: every `sudo` command is shown on a red card before anything runs, and nvHive never sees your password. The playbooks come from the upstream READMEs and have not yet been exercised by maintainers on Spark hardware. RTX Spark (Windows on Arm) installs but is unverified. [Spark →](docs/GETTING_STARTED.md#spark-playbooks)
 
 ## Requirements
 
-- **Linux x86_64 and arm64 (DGX Spark)** are the supported targets and the two CI platforms; single-file binaries for Linux x86_64, Linux arm64, macOS arm64 and Windows x86_64 are built for every tagged release on the [Releases page](https://github.com/thatcooperguy/nvHive/releases/latest)
-- **No root, no Docker** — everything installs to user-owned paths
-- **Python 3.11+**, or none at all (`NVH_USE_BINARY=1` with `start-linux.sh` fetches a single-file binary)
-- **GPU optional** — CPU-only machines get a small local model plus cloud free tiers
-- **Disk** — ~2 GB for the smallest local model; the installer shows sizes and checks free space before downloading
-
-Already have Python? `pip install nvhive` (extras: `[vision]`, `[rag]`, `[all]`; `[voice]` adds local speech-to-text, sits outside `[all]` and installs nothing on Windows on Arm).
+- Linux x86_64 or arm64; single-file binaries for Linux, macOS arm64 and Windows x86_64 ship with each [release](https://github.com/thatcooperguy/nvHive/releases/latest)
+- No root and no Docker — everything installs to paths you own
+- GPU optional — without one you get a small local model plus the free cloud tiers
+- About two gigabytes of disk for the smallest local model; the installer checks free space first
 
 ## If something breaks
 
+Press **Debug Report** in the dashboard: it writes a redacted report you can paste into an issue. From a terminal:
+
 ```bash
-nvh services             # per-service health table
-nvh services restart     # recycle the stack
-nvh status --deep        # full diagnostic
+nvh services          # per-service health table
+nvh status --deep     # full diagnostic
 ```
 
-The dashboard's **Debug Report** button generates a redacted report (secrets stripped) you can paste straight into an issue. Logs live under `$NVH_HOME/logs/`.
+Logs live under `$NVH_HOME/logs/`.
 
-## Commands
+## Docs
 
-| Command | What it does |
-|---|---|
-| `nvh "question"` | Route to the best available model |
-| `nvh ask "question" --local` | Local inference only — nothing leaves the machine |
-| `nvh convene "question"` | Multi-model council with synthesis |
-| `nvh agent run "task"` | Agentic coding with review loop |
-| `nvh models list --all` | Fit-ranked model catalog for your GPU |
-| `nvh services start` | Verified bring-up (Ollama → API → WebUI → smoke test) |
-| `nvh studio --install <pack> -y` | Rootless tool-pack install |
-| `nvh snapshot save` / `restore` | Move state across ephemeral VMs |
-| `nvh setup` | Configure providers and keys |
+Use it: [Getting Started](docs/GETTING_STARTED.md) · [Web UI](docs/WEBUI.md) · [Models](docs/MODELS.md) · [Providers](docs/PROVIDERS.md) · [Commands](docs/COMMANDS.md) · [Configuration](docs/CONFIGURATION.md) · [Mascot](docs/MASCOT.md)
+Build on it: [Integrations](docs/INTEGRATIONS.md) · [Architecture](docs/ARCHITECTURE.md) · [Testing](docs/TESTING.md) · [Contributing](CONTRIBUTING.md)
+Where it is going: [Roadmap](docs/ROADMAP.md) · [Maintainers](docs/MAINTAINERS.md)
 
-Full reference: [docs/COMMANDS.md](docs/COMMANDS.md)
+## Trust
 
-## Documentation
+Cloud providers receive the queries you route to them under their own privacy policies; `nvh ask --local` keeps inference on the machine. AI output can be wrong — review what an agent changes before you ship it. The trust boundary, loopback defaults, the privileged tier and how to report a vulnerability are in [SECURITY](SECURITY.md).
 
-| Guide | What's inside |
-|---|---|
-| [Getting Started](docs/GETTING_STARTED.md) | Install, first five minutes, hardware, running without root, studio packs, troubleshooting |
-| [Models](docs/MODELS.md) | Model Manager, GPU detection, VRAM tiers, capability matrix, `nvh bench` |
-| [Providers](docs/PROVIDERS.md) | Every provider, key variable, free tier and default model |
-| [Commands](docs/COMMANDS.md) | Generated CLI reference |
-| [Configuration](docs/CONFIGURATION.md) | `config.yaml`, env vars, `NVH_HOME` layout, `HIVE.md`, cabinets, tools, workflows |
-| [Web UI](docs/WEBUI.md) | The dashboard, page by page |
-| [Integrations](docs/INTEGRATIONS.md) | Python SDK, REST, OpenAI/Anthropic proxies, MCP, Claude Code, NemoClaw, OpenClaw, VS Code |
-| [Architecture](docs/ARCHITECTURE.md) | Request flow, modules, persistence |
-| [Testing](docs/TESTING.md) | Running and writing tests, CI |
-| [Mascot](docs/MASCOT.md) | The WebUI sprite guide: states, manifest, how to swap the art |
-| [Maintainers](docs/MAINTAINERS.md) | Releasing, service order, production readiness |
-| [Roadmap](docs/ROADMAP.md) | Plan by release, feature table, non-goals |
-
-## Notes
-
-- Cloud providers receive the queries you route to them, under their own privacy policies. Use `nvh ask --local` to keep inference local.
-- AI output can be wrong. Review agent-modified files before shipping them.
-
-## License
-
-**PolyForm Noncommercial 1.0.0** — use, modify, and share nvHive freely for any noncommercial purpose. **Selling this code or using it commercially is not permitted.** See [LICENSE](LICENSE) and [NOTICE](NOTICE.md). Versions 0.40.0 and earlier were released under MIT and remain MIT.
-
-The license does not grant rights to the nvHive name or logos; forks should use distinct names. See [TRADEMARKS](TRADEMARKS.md).
-
-Trust boundary, loopback defaults, the privileged tier and how to report a vulnerability: [SECURITY](SECURITY.md).
+**PolyForm Noncommercial 1.0.0** — use, modify and share nvHive for any noncommercial purpose; selling it or using it commercially is not permitted. See [LICENSE](LICENSE) and [NOTICE](NOTICE.md); versions 0.40.0 and earlier remain MIT. The license grants no rights to the nvHive name or logos; forks use their own names ([TRADEMARKS](TRADEMARKS.md)).

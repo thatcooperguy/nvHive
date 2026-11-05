@@ -13,6 +13,12 @@ export type PaletteActionId =
   | 'model-best-local'
   | 'model-gpt56-terra'
   | 'model-claude-sonnet'
+  | 'nav-chat'
+  | 'nav-models'
+  | 'nav-agents'
+  | 'nav-vault'
+  | 'nav-schedules'
+  | 'nav-setup'
   | 'nav-system'
   | 'nav-providers'
   | 'nav-analytics'
@@ -53,12 +59,18 @@ const STATIC_ACTIONS: PaletteAction[] = [
   { id: 'model-gpt56-terra',    label: 'Switch to GPT-5.6 Terra',   category: 'Models', icon: '▷' },
   { id: 'model-claude-sonnet',  label: 'Switch to Claude Sonnet',   category: 'Models', icon: '▷' },
 
-  // Navigation
-  { id: 'nav-system',       label: 'Go to System',       category: 'Navigation', icon: '⊞' },
-  { id: 'nav-providers',    label: 'Go to Providers',    category: 'Navigation', icon: '⊟' },
-  { id: 'nav-integrations', label: 'Go to Integrations', category: 'Navigation', icon: '⊡' },
-  { id: 'nav-analytics',    label: 'Go to Analytics',    category: 'Navigation', icon: '▤' },
-  { id: 'nav-settings',     label: 'Go to Settings',     category: 'Navigation', icon: '⚙' },
+  // Navigation — every page, by its sidebar name and (for one release) the old one
+  { id: 'nav-chat',         label: 'Go to Chat (AI Wizard)',                   category: 'Navigation', icon: '▶' },
+  { id: 'nav-models',       label: 'Go to Models',                             category: 'Navigation', icon: '▷' },
+  { id: 'nav-agents',       label: 'Go to Agents',                             category: 'Navigation', icon: '◈' },
+  { id: 'nav-vault',        label: 'Go to Memory (Vault)',                     category: 'Navigation', icon: '▣' },
+  { id: 'nav-schedules',    label: 'Go to Schedules',                          category: 'Navigation', icon: '◷' },
+  { id: 'nav-setup',        label: 'Go to Settings → Get started (Setup)',     category: 'Navigation', icon: '⊕' },
+  { id: 'nav-providers',    label: 'Go to Settings → Connections (Providers)', category: 'Navigation', icon: '⊟' },
+  { id: 'nav-integrations', label: 'Go to Settings → Developer tools (Integrations)', category: 'Navigation', icon: '⊡' },
+  { id: 'nav-system',       label: 'Go to Settings → This computer (System)',  category: 'Navigation', icon: '⊞' },
+  { id: 'nav-analytics',    label: 'Go to Settings → Usage (Analytics)',       category: 'Navigation', icon: '▤' },
+  { id: 'nav-settings',     label: 'Go to Settings → Preferences',             category: 'Navigation', icon: '⚙' },
 
   // Settings
   { id: 'toggle-sidebar',  label: 'Toggle Sidebar',           category: 'Settings', shortcut: 'Ctrl+B', icon: '◧' },

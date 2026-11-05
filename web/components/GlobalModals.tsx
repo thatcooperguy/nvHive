@@ -62,6 +62,24 @@ export default function GlobalModals() {
         dispatchShortcut('mode-poll');
         router.push('/');
         break;
+      case 'nav-chat':
+        router.push('/wizard');
+        break;
+      case 'nav-models':
+        router.push('/models');
+        break;
+      case 'nav-agents':
+        router.push('/agents');
+        break;
+      case 'nav-vault':
+        router.push('/vault');
+        break;
+      case 'nav-schedules':
+        router.push('/schedules');
+        break;
+      case 'nav-setup':
+        router.push('/setup');
+        break;
       case 'nav-system':
         router.push('/system');
         break;

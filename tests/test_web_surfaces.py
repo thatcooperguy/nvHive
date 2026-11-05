@@ -229,6 +229,25 @@ def test_sidebar_links_the_schedules_page() -> None:
     assert "href: '/schedules'" in nav
 
 
+def test_sidebar_shows_five_destinations_and_groups_the_operator_pages() -> None:
+    """0.47 S1 (SIMPLIFY design §2): five everyday destinations plus a Settings group.
+    Hidden is not removed — every route keeps a link, so the Atohi rule holds."""
+    sidebar = _read("components/Sidebar.tsx")
+    nav = _block(sidebar, "const BOTTOM_NAV = [", "\n];")
+    settings = _block(sidebar, "const SETTINGS_NAV = [", "\n];")
+    assert re.findall(r"href: '([^']+)'", nav) == ["/wizard", "/models", "/agents", "/vault", "/schedules"]
+    assert re.findall(r"href: '([^']+)'", settings) == [
+        "/setup", "/providers", "/integrations", "/system", "/analytics", "/settings",
+    ]
+    assert "SETTINGS_NAV.some(item => pathname.startsWith(item.href))" in sidebar
+    palette = _read("components/CommandPalette.tsx")
+    for action in ("nav-chat", "nav-models", "nav-agents", "nav-vault", "nav-schedules", "nav-setup"):
+        assert f"id: '{action}'" in palette, action
+    modals = _read("components/GlobalModals.tsx")
+    for action in ("nav-chat", "nav-models", "nav-agents", "nav-vault", "nav-schedules", "nav-setup"):
+        assert f"case '{action}':" in modals, action
+
+
 def test_schedules_page_offers_ask_and_convene_only() -> None:
     page_path = WEB / "app" / "schedules" / "page.tsx"
     assert page_path.is_file()

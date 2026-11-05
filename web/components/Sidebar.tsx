@@ -266,18 +266,26 @@ interface SidebarProps {
   topOffset?: boolean;
 }
 
+// 0.47 (SIMPLIFY design §2): five destinations a person uses every day, in
+// their own words. Every route from before is unchanged; the operator pages
+// sit one step away under the Settings group below.
 const BOTTOM_NAV = [
-  { href: '/wizard', label: 'AI Wizard', icon: <IconWizard /> },
-  { href: '/agents', label: 'Agents', icon: <IconAgents /> },
+  { href: '/wizard', label: 'Chat', icon: <IconWizard /> },
   { href: '/models', label: 'Models', icon: <IconModels /> },
-  { href: '/setup', label: 'Setup', icon: <IconSetup /> },
-  { href: '/system', label: 'My Computer', icon: <IconSystem /> },
-  { href: '/vault', label: 'Memory Vault', icon: <IconVault /> },
-  { href: '/providers', label: 'AI Connections', icon: <IconProviders /> },
+  { href: '/agents', label: 'Agents', icon: <IconAgents /> },
+  { href: '/vault', label: 'Memory', icon: <IconVault /> },
+  { href: '/schedules', label: 'Schedules', icon: <IconSchedules /> },
+];
+
+// The Settings group: hidden, not removed. It opens itself while one of its
+// pages is active, and the command palette lists every page by both names.
+const SETTINGS_NAV = [
+  { href: '/setup', label: 'Get started', icon: <IconSetup /> },
+  { href: '/providers', label: 'Connections', icon: <IconProviders /> },
+  { href: '/integrations', label: 'Developer tools', icon: <IconIntegrations /> },
+  { href: '/system', label: 'This computer', icon: <IconSystem /> },
   { href: '/analytics', label: 'Usage', icon: <IconAnalytics /> },
   { href: '/settings', label: 'Preferences', icon: <IconSettings /> },
-  { href: '/integrations', label: 'Developer Tools', icon: <IconIntegrations /> },
-  { href: '/schedules', label: 'Schedules', icon: <IconSchedules /> },
 ];
 
 export default function Sidebar({
@@ -294,6 +302,9 @@ export default function Sidebar({
   const pathname = usePathname();
   const [connected, setConnected] = useState<boolean | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsActive = SETTINGS_NAV.some(item => pathname.startsWith(item.href));
+  const showSettings = settingsOpen || settingsActive;
   const [search, setSearch] = useState('');
   const [searchHits, setSearchHits] = useState<ConversationSearchHit[]>([]);
   const [searching, setSearching] = useState(false);
@@ -557,6 +568,47 @@ export default function Sidebar({
                     ? 'nav-active'
                     : 'text-[#737373] hover:text-[#0a0a0a] hover:bg-[#f5f5f5] dark:text-[#a3a3a3] dark:hover:text-[#fafafa] dark:hover:bg-[#141414]'
                 } ${collapsed ? 'justify-center' : ''}`}
+              >
+                <span className={`flex-shrink-0 ${isActive ? 'text-[#76B900]' : 'text-[#a3a3a3]'}`}>
+                  {item.icon}
+                </span>
+                {!collapsed && <span className="tracking-wide">{item.label}</span>}
+              </Link>
+            );
+          })}
+
+          {/* Settings group (0.47): the operator pages, one click away */}
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(open => !open)}
+            aria-expanded={showSettings}
+            title={collapsed ? 'Settings' : undefined}
+            className={`w-full flex items-center gap-3 px-3 py-2 text-xs font-medium transition-all ${
+              settingsActive
+                ? 'nav-active'
+                : 'text-[#737373] hover:text-[#0a0a0a] hover:bg-[#f5f5f5] dark:text-[#a3a3a3] dark:hover:text-[#fafafa] dark:hover:bg-[#141414]'
+            } ${collapsed ? 'justify-center' : ''}`}
+          >
+            <span className={`flex-shrink-0 ${settingsActive ? 'text-[#76B900]' : 'text-[#a3a3a3]'}`}>
+              <IconSettings />
+            </span>
+            {!collapsed && <span className="tracking-wide">Settings</span>}
+            {!collapsed && (
+              <span className="ml-auto text-[10px] text-[#a3a3a3]" aria-hidden="true">{showSettings ? '▾' : '▸'}</span>
+            )}
+          </button>
+          {showSettings && SETTINGS_NAV.map(item => {
+            const isActive = pathname.startsWith(item.href);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                title={collapsed ? item.label : undefined}
+                className={`flex items-center gap-3 py-2 text-xs font-medium transition-all ${collapsed ? 'justify-center px-3' : 'pl-8 pr-3'} ${
+                  isActive
+                    ? 'nav-active'
+                    : 'text-[#737373] hover:text-[#0a0a0a] hover:bg-[#f5f5f5] dark:text-[#a3a3a3] dark:hover:text-[#fafafa] dark:hover:bg-[#141414]'
+                }`}
               >
                 <span className={`flex-shrink-0 ${isActive ? 'text-[#76B900]' : 'text-[#a3a3a3]'}`}>
                   {item.icon}

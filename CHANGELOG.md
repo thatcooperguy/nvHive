@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Changed
+- **The README says what happens.** Rewritten for the ten-second read: one
+  sentence, the one command, four lines on what the installer does before the
+  browser opens, what you get in the user's words, who it is for, how to get
+  help, one grouped line of docs links. The 0.46 release notes that had grown
+  into the AI Wizard blurb, the hand-typed profile count and the two long
+  tables are gone; every `docs/<page>` is still named, every link resolves,
+  and the Spark playbooks keep their "not yet exercised on hardware" sentence.
+  The plan behind it is `docs/proposals/SIMPLIFY_0_47_DESIGN_2026-11.md`.
+- **The sidebar shows five destinations and a Settings group.** Chat, Models,
+  Agents, Memory, Schedules, then **Settings ▸** holding Get started
+  (`/setup`), Connections (`/providers`), Developer tools (`/integrations`),
+  This computer (`/system`), Usage (`/analytics`) and Preferences
+  (`/settings`). Every route is unchanged — the group opens itself while one
+  of its pages is active — and the command palette lists each page under its
+  new name and, for one release, the old one. WEBUI.md's page table uses the
+  new labels. The `/query` and `/council` redirect comment in
+  `web/next.config.js` now carries the O14 date (they retire with the
+  `/wizard` redirect that follows the shell merge).
+
 ## [0.46.0] - 2026-11-02
 
 Seven of the eight add items of #133, on their second re-scope (the eighth,
