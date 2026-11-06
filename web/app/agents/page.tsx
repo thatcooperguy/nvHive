@@ -11,7 +11,7 @@
  *
  * Each card shows the persona avatar, title, description, capability tags,
  * the model + temperature it prefers, and (when set) the per-turn cost
- * ceiling. "Use this agent" deep-links into /wizard?profile=<name> so the
+ * ceiling. "Use this agent" deep-links into /?profile=<name> so the
  * existing chat surface opens with the selected persona active.
  */
 
@@ -146,7 +146,7 @@ function AgentCard({ profile }: AgentCardProps) {
 
       <div className="mt-auto flex items-center gap-2 pt-1">
         <Link
-          href={`/wizard?profile=${encodeURIComponent(profile.name)}`}
+          href={`/?profile=${encodeURIComponent(profile.name)}`}
           className="flex-1 rounded bg-[#76B900] px-3 py-1.5 text-center text-[10px] font-mono font-bold uppercase tracking-wider text-black transition-colors hover:bg-[#5a9100]"
         >
           Use this agent

@@ -2970,7 +2970,7 @@ export default function SetupPage() {
    * that can explain or fix it. */
   const askWizardAbout = useCallback((label: string) => {
     const starter = `Help me with: ${label} — what's wrong and what's the safest fix?`;
-    router.push(`/wizard?starter=${encodeURIComponent(starter)}`);
+    router.push(`/?starter=${encodeURIComponent(starter)}`);
   }, [router]);
 
   const handleSystemCheckClick = (label: string) => {
@@ -6241,7 +6241,7 @@ export default function SetupPage() {
               <Link href="/" className="btn-primary flex-1 py-3 text-sm font-mono uppercase tracking-widest text-center">
                 GO TO DASHBOARD
               </Link>
-              <Link href="/wizard" className="btn-secondary flex-1 py-3 text-xs font-mono uppercase tracking-widest text-center">
+              <Link href="/" className="btn-secondary flex-1 py-3 text-xs font-mono uppercase tracking-widest text-center">
                 ASK THE AI WIZARD
               </Link>
             </div>

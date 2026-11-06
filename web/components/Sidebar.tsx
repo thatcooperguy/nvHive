@@ -270,7 +270,7 @@ interface SidebarProps {
 // their own words. Every route from before is unchanged; the operator pages
 // sit one step away under the Settings group below.
 const BOTTOM_NAV = [
-  { href: '/wizard', label: 'Chat', icon: <IconWizard /> },
+  { href: '/', label: 'Chat', icon: <IconWizard /> },
   { href: '/models', label: 'Models', icon: <IconModels /> },
   { href: '/agents', label: 'Agents', icon: <IconAgents /> },
   { href: '/vault', label: 'Memory', icon: <IconVault /> },
@@ -557,7 +557,7 @@ export default function Sidebar({
         {/* Bottom nav links */}
         <div className="border-t border-[#e5e5e5] dark:border-[#262626]">
           {BOTTOM_NAV.map(item => {
-            const isActive = pathname.startsWith(item.href);
+            const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
             return (
               <Link
                 key={item.href}

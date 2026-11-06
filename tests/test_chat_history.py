@@ -260,7 +260,7 @@ class TestFrontendWiring:
         # The shared sidebar is fed real history on non-root pages and routes
         # a conversation back to the surface that produced it.
         assert "getConversations" in shell
-        assert "/wizard?conversation=" in shell
+        assert "/?c=" in shell
         assert "onSelectConversation" in shell
 
         page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")

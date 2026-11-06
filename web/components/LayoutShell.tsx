@@ -70,7 +70,7 @@ function InnerShell({ children }: { children: React.ReactNode }) {
     if (isChatPage || isSetupPage) return; // those surfaces manage their own
     refreshConversations();
     // Highlight the open conversation (both surfaces carry it in the URL:
-    // /wizard?conversation=<id>, /?c=<id>). usePathname excludes the query,
+    // /?c=<id>; /wizard?conversation=<id> redirects there). usePathname excludes the query,
     // so read it off location once navigation has committed.
     try {
       const params = new URLSearchParams(window.location.search);
@@ -88,13 +88,10 @@ function InnerShell({ children }: { children: React.ReactNode }) {
       router.push('/');
       return;
     }
-    const conv = conversations.find(c => c.id === id);
-    router.push(
-      conv?.mode === 'wizard'
-        ? `/wizard?conversation=${encodeURIComponent(id)}`
-        : `/?c=${encodeURIComponent(id)}`
-    );
-  }, [conversations, router]);
+    // One chat home (0.47): every thread, wizard or not, resumes on `/?c=`;
+    // the chat page picks the mode from the conversation.
+    router.push(`/?c=${encodeURIComponent(id)}`);
+  }, [router]);
 
   const handleRenameConversation = useCallback((id: string, title: string) => {
     setConversations(prev => prev.map(c => c.id === id ? { ...c, title } : c));

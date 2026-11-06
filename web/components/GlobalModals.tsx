@@ -63,7 +63,7 @@ export default function GlobalModals() {
         router.push('/');
         break;
       case 'nav-chat':
-        router.push('/wizard');
+        router.push('/');
         break;
       case 'nav-models':
         router.push('/models');

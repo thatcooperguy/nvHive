@@ -4,7 +4,9 @@ const nextConfig = {
   // /query and /council were folded into the chat page in 0.42. They were due
   // to go in 0.43; the 0.46 design (O14) re-dated them to retire together with
   // the one-release /wizard redirect that follows the shell merge (0.47 plan,
-  // SIMPLIFY_0_47_DESIGN_2026-11.md §3): all three go in 0.48.
+  // SIMPLIFY_0_47_DESIGN_2026-11.md §3): all three go in 0.48. The /wizard
+  // redirect itself is app/wizard/page.tsx (it has to rename ?conversation=
+  // to ?c= and keep the other parameters, which a static redirect cannot).
   async redirects() {
     return [
       { source: '/query', destination: '/', permanent: false },

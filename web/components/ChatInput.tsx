@@ -190,7 +190,8 @@ export default function ChatInput({
   // For the textarea, we still use the plain onChange
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      // Enter sends in every mode (0.47, O9); Shift+Enter makes a new line.
+      if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         if (!streaming && (value.trim() || attachedFiles.length > 0)) handleSubmit();
       }
@@ -414,7 +415,7 @@ export default function ChatInput({
             onClick={handleSubmit}
             disabled={disabled || (!value.trim() && attachedFiles.length === 0)}
             className="flex-shrink-0 w-9 h-9 flex items-center justify-center bg-[#76B900] hover:bg-[#5a9100] text-black transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Send (Ctrl+Enter)"
+            title="Send (Enter)"
             style={{ boxShadow: (value.trim() || attachedFiles.length > 0) ? '0 4px 12px rgba(118,185,0,0.3)' : undefined }}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -501,7 +502,7 @@ export default function ChatInput({
         )}
 
         <span className="ml-auto text-[9px] font-mono text-[#a3a3a3] ctrl-enter-hint dark:text-[#737373]">
-          Ctrl+Enter to send
+          Enter to send · Shift+Enter for a new line
         </span>
       </div>
     </div>

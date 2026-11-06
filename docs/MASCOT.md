@@ -109,7 +109,7 @@ beyond the `working` the `tool_result` event itself implies.
 Tips (`sayMascotTip(text, { id, ttlMs })`) show once per `id` per browser
 session; the id is burned only when the bubble actually renders, so a hidden
 mascot never consumes a tip. Today: a welcome on `/setup`, and the most severe
-open finding from `/v1/wizard/diagnostics` when the Wizard page loads. That
+open finding from `/v1/wizard/diagnostics` when the chat home loads in Wizard mode. That
 diagnostics probe is a full workspace scan (~360 ms), so WizardThread runs it
 only while the mascot is visible, at most once per session
 (`sessionStorage["nvh.mascot.diagtip.probed"]`, set after the probe completes

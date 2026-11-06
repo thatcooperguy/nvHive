@@ -63,7 +63,7 @@ import {
 import type { InstallJob, Schedule, ScheduleMode, ScheduleRunEvent, SchedulesResult } from '@/lib/types';
 
 /** Deep link to a schedule's thread. C1b changes this one constant to `/?c=`. */
-const THREAD_LINK_PREFIX = '/wizard?conversation=';
+const THREAD_LINK_PREFIX = '/?c=';
 /** How often the list is re-read while the page is open. */
 const REFRESH_MS = 30_000;
 /** Rows the run drawer asks for (the server keeps `runner.history` per schedule). */

@@ -58,9 +58,14 @@ def _web_sources() -> list[Path]:
 
 
 def test_wizard_page_mounts_the_extracted_thread() -> None:
-    page = _read("app/wizard/page.tsx")
+    """0.47 S2: the one chat home. `/` mounts the thread as its default mode and
+    `/wizard` is a one-release redirect that renames `?conversation=` to `?c=`."""
+    page = _read("app/page.tsx")
     assert "import WizardThread from '@/components/chat/WizardThread';" in page
-    assert '<WizardThread conversationParam="conversation" />' in page
+    assert '<WizardThread key={activeConvId ?? \'new\'} conversationParam="c" />' in page
+    assert "useState<ChatMode>('wizard')" in page, "the Wizard is the default mode"
+    stub = _read("app/wizard/page.tsx")
+    assert "WizardThread" not in stub and "router.replace(" in stub and "params.set('c', id)" in stub
     assert (WEB / "components" / "chat" / "WizardThread.tsx").is_file()
     assert not (WEB / "components" / "WizardChat.tsx").exists(), (
         "WizardChat.tsx was replaced by components/chat/WizardThread.tsx; a "
@@ -235,7 +240,7 @@ def test_sidebar_shows_five_destinations_and_groups_the_operator_pages() -> None
     sidebar = _read("components/Sidebar.tsx")
     nav = _block(sidebar, "const BOTTOM_NAV = [", "\n];")
     settings = _block(sidebar, "const SETTINGS_NAV = [", "\n];")
-    assert re.findall(r"href: '([^']+)'", nav) == ["/wizard", "/models", "/agents", "/vault", "/schedules"]
+    assert re.findall(r"href: '([^']+)'", nav) == ["/", "/models", "/agents", "/vault", "/schedules"]
     assert re.findall(r"href: '([^']+)'", settings) == [
         "/setup", "/providers", "/integrations", "/system", "/analytics", "/settings",
     ]
@@ -255,7 +260,7 @@ def test_schedules_page_offers_ask_and_convene_only() -> None:
     values = set(re.findall(r'<option value="([^"]*)"', page))
     assert {"ask", "convene"} <= values
     assert "do" not in values, "do-mode schedules are CLI-only; the API runner refuses them"
-    assert "'/wizard?conversation='" in page, "threads open on the Wizard surface until C1b lands"
+    assert "'/?c='" in page, "threads open on the one chat home (0.47)"
 
 
 def test_schedules_live_panel_tells_a_lost_watcher_from_a_failed_job() -> None:

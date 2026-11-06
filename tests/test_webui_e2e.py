@@ -120,7 +120,7 @@ class TestWebUIChat:
         textarea = page.locator('textarea[placeholder="Send a message..."]')
         textarea.fill("Say hello in exactly 3 words")
 
-        send_btn = page.locator('button[title="Send (Ctrl+Enter)"]')
+        send_btn = page.locator('button[title="Send (Enter)"]')
         send_btn.click()
 
         # Wait for response (assistant message with left border)

@@ -1576,10 +1576,11 @@ export interface VaultMemoryResult {
 
 // ─── Chat UI types ────────────────────────────────────────────────────────────
 
-export type ChatMode = 'single' | 'council' | 'compare';
+/** The modes of the one chat home (`/`, 0.47): the Wizard is the default. */
+export type ChatMode = 'wizard' | 'single' | 'council' | 'compare';
 
 /** Which surface a stored conversation belongs to. Superset of ChatMode:
- * 'wizard' chats resume on /wizard, everything else on the main chat. */
+ * every mode resumes on `/?c=<id>` (0.47); `/wizard?conversation=` redirects there for one release. */
 export type ConversationMode = ChatMode | 'wizard';
 
 export interface ChatMessage {
@@ -1981,7 +1982,7 @@ export interface ScheduleRunEvent {
   message: string;
   outcome?: 'ok' | 'deferred' | 'skipped';
   schedule_id?: string;
-  /** Absent on a `skipped` outcome and on `error`. The thread link is `/wizard?conversation=<id>`. */
+  /** Absent on a `skipped` outcome and on `error`. The thread link is `/?c=<id>`. */
   conversation_id?: string;
   answer?: string;
   provider?: string;

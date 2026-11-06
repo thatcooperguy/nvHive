@@ -189,7 +189,7 @@ export default function Mascot() {
 
   const askWizard = useCallback(() => {
     setMenuOpen(false);
-    router.push('/wizard');
+    router.push('/');
   }, [router]);
 
   if (!mounted) return null;

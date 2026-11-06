@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { Suspense, useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
@@ -14,6 +14,7 @@ import CouncilAdvancedDrawer, {
 import { HardwareWidgetCompact, HardwareWidgetHero } from '@/components/HardwareWidget';
 import SessionCostPill from '@/components/SessionCostPill';
 import WelcomeBackPanel from '@/components/WelcomeBackPanel';
+import WizardThread from '@/components/chat/WizardThread';
 import { useUIShell } from '@/components/UIShellProvider';
 import {
   CONVERSATIONS_CHANGED_EVENT,
@@ -60,8 +61,17 @@ function titleFromMessage(msg: string): string {
 }
 
 function isChatMode(value: string | null): value is ChatMode {
-  return value === 'single' || value === 'council' || value === 'compare';
+  return value === 'wizard' || value === 'single' || value === 'council' || value === 'compare';
 }
+
+// The one chat home (0.47 S2, SIMPLIFY design §3): the Wizard is the default
+// mode of `/`; Ask, Convene and Poll are the other modes of the same page.
+const MODE_TABS: { mode: ChatMode; label: string; title: string }[] = [
+  { mode: 'wizard', label: 'Wizard', title: 'The Wizard: knows this machine, uses tools, picks a hidden specialist per turn' },
+  { mode: 'single', label: 'Ask', title: 'One model answers' },
+  { mode: 'council', label: 'Convene', title: 'Several models deliberate; one synthesis answers' },
+  { mode: 'compare', label: 'Poll', title: 'Several models answer side by side' },
+];
 
 // ─── Top-bar pills ────────────────────────────────────────────────────────────
 // GPU pill is <HardwareWidgetCompact /> from components/HardwareWidget.tsx,
@@ -300,7 +310,7 @@ export default function ChatPage() {
 
   // Input state
   const [inputValue, setInputValue] = useState('');
-  const [mode, setMode] = useState<ChatMode>('single');
+  const [mode, setMode] = useState<ChatMode>('wizard');
   const [selectedModel, setSelectedModel] = useState('');
   const [models, setModels] = useState<ModelOption[]>([]);
   const [councilOptions, setCouncilOptions] = useState<CouncilOptions>(DEFAULT_COUNCIL_OPTIONS);
@@ -510,12 +520,33 @@ export default function ChatPage() {
     setInputValue('');
     setRightPanelOpen(false);
     resetCouncilState();
-  }, [teardownStreams, resetCouncilState]);
+    // A wizard thread's id lives in the URL (`?c=`); a new chat drops it so
+    // the remounted WizardThread starts clean.
+    if (typeof window !== 'undefined' && window.location.search) router.replace('/');
+  }, [teardownStreams, resetCouncilState, router]);
 
   const handleModeChange = useCallback((newMode: ChatMode) => {
+    if (mode === 'wizard' && newMode !== 'wizard') {
+      // Leaving the Wizard: its thread stays in the sidebar; this surface
+      // starts clean rather than showing a wizard thread as a chat.
+      setActiveConvId(null);
+      setMessages([]);
+      if (typeof window !== 'undefined' && window.location.search) router.replace('/');
+    }
     setMode(newMode);
     setRightPanelOpen(newMode === 'council');
-  }, []);
+  }, [mode, router]);
+
+  // A wizard thread resumes in Wizard mode on this page: `?c=<id>` is what
+  // WizardThread reads, and a new id remounts it (see the `key` below).
+  const openWizardThread = useCallback((id: string) => {
+    setActiveConvId(id);
+    setMessages([]);
+    resetCouncilState();
+    setRightPanelOpen(false);
+    setMode('wizard');
+    router.replace(`/?c=${encodeURIComponent(id)}`);
+  }, [resetCouncilState, router]);
 
   const handleSelectConversation = useCallback(async (id: string) => {
     if (!id) {
@@ -524,12 +555,11 @@ export default function ChatPage() {
       return;
     }
     teardownStreams();
-    // Wizard chats resume on their own surface — this page's message shapes
+    // Wizard chats resume in Wizard mode — this page's message shapes
     // (council data, member streams) don't apply to a wizard thread.
-    // replace() so Back doesn't bounce through /?c= into a redirect loop.
     const meta = conversations.find(c => c.id === id);
     if (meta?.mode === 'wizard') {
-      router.replace(`/wizard?conversation=${encodeURIComponent(id)}`);
+      openWizardThread(id);
       return;
     }
     setActiveConvId(id);
@@ -538,13 +568,18 @@ export default function ChatPage() {
     setRightPanelOpen(false);
 
     const remote = await getConversation(id);
-    // Deep-linked wizard chat before the list loaded — re-route.
+    // Deep-linked wizard chat before the list loaded — open it in Wizard mode.
     if (remote?.mode === 'wizard') {
-      router.replace(`/wizard?conversation=${encodeURIComponent(id)}`);
+      openWizardThread(id);
       return;
     }
     const resumedMode = remote?.mode ?? meta?.mode ?? null;
-    if (isChatMode(resumedMode)) handleModeChange(resumedMode);
+    if (resumedMode === 'single' || resumedMode === 'council' || resumedMode === 'compare') {
+      setMode(resumedMode);
+      setRightPanelOpen(resumedMode === 'council');
+    } else if (mode === 'wizard') {
+      setMode('single');
+    }
     if (remote?.messages?.length) {
       setMessages(remote.messages
         .filter(m => m.role !== 'system')
@@ -561,7 +596,7 @@ export default function ChatPage() {
           timestamp: m.timestamp,
         })));
     }
-  }, [conversations, router, teardownStreams, resetCouncilState, handleModeChange]);
+  }, [conversations, teardownStreams, resetCouncilState, openWizardThread, mode]);
 
   const handleRenameConversation = useCallback((id: string, title: string) => {
     setConversations(prev => prev.map(c => c.id === id ? { ...c, title } : c));
@@ -599,6 +634,9 @@ export default function ChatPage() {
     }
     const wantedMode = params.get('mode');
     if (isChatMode(wantedMode)) handleModeChange(wantedMode);
+    // The Wizard's own deep links (`/?starter=…`, `/?profile=…`, `/?issue=…`,
+    // formerly on /wizard) open in Wizard mode; WizardThread reads them.
+    if (params.get('starter') || params.get('profile') || params.get('issue')) handleModeChange('wizard');
     const prompt = params.get('prompt');
     if (prompt) {
       setInputValue(prompt);
@@ -1097,6 +1135,30 @@ export default function ChatPage() {
               {activeTitle ?? 'NVIDIA AI Workspace'}
             </span>
           </div>
+          {/* Mode switch (0.47 S2): Wizard is the default; Ask, Convene and
+              Poll are the other modes of this one home. */}
+          <div
+            className="hidden sm:flex items-center rounded-md border border-[#e5e5e5] bg-[#fafafa] p-0.5 text-[10px] font-mono dark:border-[#262626] dark:bg-[#141414]"
+            role="tablist"
+            aria-label="Chat mode"
+          >
+            {MODE_TABS.map(tab => (
+              <button
+                key={tab.mode}
+                role="tab"
+                aria-selected={mode === tab.mode}
+                onClick={() => handleModeChange(tab.mode)}
+                title={tab.title}
+                className={`px-2 py-0.5 rounded transition-colors ${
+                  mode === tab.mode
+                    ? 'bg-white text-[#0a0a0a] shadow-sm dark:bg-[#0a0a0a] dark:text-[#fafafa]'
+                    : 'text-[#737373] hover:text-[#0a0a0a] dark:text-[#a3a3a3] dark:hover:text-[#fafafa]'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
           <div className="flex items-center gap-2">
             <HardwareWidgetCompact />
             <SessionCostPill className="rounded-md border border-[#e5e5e5] bg-[#ffffff] px-2 py-0.5 dark:border-[#262626] dark:bg-[#0a0a0a]" />
@@ -1145,6 +1207,14 @@ export default function ChatPage() {
         <div className="flex flex-1 overflow-hidden">
           {/* Chat area */}
           <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+            {mode === 'wizard' ? (
+              /* One chat home (0.47 S2): the Wizard owns its thread, composer
+                 and cards; `?c=<id>` resumes a thread and a new id remounts it. */
+              <Suspense fallback={null}>
+                <WizardThread key={activeConvId ?? 'new'} conversationParam="c" />
+              </Suspense>
+            ) : (
+            <>
             {/* Messages */}
             <div className="flex-1 overflow-y-auto py-4">
               {messages.length === 0 ? (
@@ -1197,6 +1267,8 @@ export default function ChatPage() {
               providerHealth={providerHealth}
               streaming={streaming}
             />
+            </>
+            )}
           </div>
 
           {/* Right panel — council settings + live experts */}

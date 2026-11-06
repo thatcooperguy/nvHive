@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+- **One chat home.** `/` hosts the Wizard as its default mode, with Ask
+  (one model), Convene (council) and Poll (compare) as the other modes of
+  the same page, switched in the top bar; a wizard thread opened from the
+  sidebar or a link resumes at `/?c=<id>` in Wizard mode and the other
+  modes keep their own threads. `/wizard` is a one-release redirect that
+  renames `?conversation=` to `?c=` and keeps `starter`, `profile` and
+  `issue`; every link that pointed at it (the Agents page, the Setup page,
+  the Schedules page's Open thread, the mascot's Ask the Wizard, the
+  command palette, the shared sidebar) now points at `/`. Enter sends in
+  every mode and Shift+Enter makes a new line. The C1b shell merge held
+  out of 0.46 (O9), done the cheap way: the chat page keeps its chrome and
+  mounts `WizardThread` for the default mode.
+
 ### Changed
 - **The README says what happens.** Rewritten for the ten-second read: one
   sentence, the one command, four lines on what the installer does before the
