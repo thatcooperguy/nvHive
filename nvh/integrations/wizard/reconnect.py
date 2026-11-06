@@ -23,11 +23,16 @@ one the WelcomeBackPanel UI component renders.
 
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 from nvh.integrations.diagnostics.boot_preflight import host_fingerprint, run_boot_preflight
+
+# The route runs this on a worker thread; two tabs reconnecting at once must not
+# interleave the fingerprint write and repairs, so they take turns.
+_RECONNECT_LOCK = threading.Lock()
 
 
 def _label_for(fact_key: str) -> str:
@@ -221,7 +226,8 @@ def wizard_reconnect(home_dir: str | Path | None = None) -> dict[str, Any]:
     in this module's docstring.
     """
     started = time.monotonic()
-    result = run_boot_preflight(home_dir=home_dir)
+    with _RECONNECT_LOCK:
+        result = run_boot_preflight(home_dir=home_dir)
     elapsed_ms = int((time.monotonic() - started) * 1000)
 
     changes_raw = result.get("changes") or []

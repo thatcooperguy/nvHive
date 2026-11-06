@@ -104,6 +104,10 @@ function writeCollapsed(value: boolean): void {
 const AUTO_RESTART_FAILURES_THRESHOLD = 3;
 const AUTO_RESTART_MIN_GAP_MS = 120_000;
 const AUTO_RESTART_MAX_ATTEMPTS = 3;
+// A restart needs a second, separate failed probe this long after the
+// threshold is hit: an aborted probe is a stall, not proof the API is down.
+const AUTO_RESTART_CONFIRM_GAP_MS = 5_000;
+const AUTO_RESTART_MESSAGE_PREFIX = 'Auto-restarting API';
 const PROBE_TIMEOUT_MS = 8_000;
 const BOOT_GRACE_MS = 20_000;
 
@@ -137,6 +141,7 @@ export default function SystemConsole() {
   // window to expire again.
   const mountedAtRef = useRef<number>(0);
   const everHealthyRef = useRef<boolean>(false);
+  const confirmingRestartRef = useRef<boolean>(false);
 
   // Restore last collapsed state.
   useEffect(() => {
@@ -152,7 +157,20 @@ export default function SystemConsole() {
     let cancelled = false;
     mountedAtRef.current = Date.now();
 
+    const probeApiOnce = async (): Promise<boolean> => {
+      try {
+        const ctl = new AbortController();
+        const t = setTimeout(() => ctl.abort(), PROBE_TIMEOUT_MS);
+        const r = await fetch(`${API_BASE}/v1/health`, { signal: ctl.signal, cache: 'no-store' });
+        clearTimeout(t);
+        return r.ok;
+      } catch {
+        return false;
+      }
+    };
+
     const maybeAutoRestart = async () => {
+      if (confirmingRestartRef.current) return;
       const now = Date.now();
       // Boot-grace: if we've never seen the API healthy AND we're still
       // inside the first 20s, skip auto-restart. Cold cloud rigs can take
@@ -164,7 +182,14 @@ export default function SystemConsole() {
       if (apiFailuresRef.current < AUTO_RESTART_FAILURES_THRESHOLD) return;
       if (now - lastAutoRestartAtRef.current < AUTO_RESTART_MIN_GAP_MS) return;
       if (autoRestartAttemptsRef.current >= AUTO_RESTART_MAX_ATTEMPTS) return;
-      lastAutoRestartAtRef.current = now;
+      // Two-failure rule: wait, then probe again; restart only if that
+      // second probe also fails and no healthy probe landed meanwhile.
+      confirmingRestartRef.current = true;
+      await new Promise(res => setTimeout(res, AUTO_RESTART_CONFIRM_GAP_MS));
+      const confirmedDown = !cancelled && apiFailuresRef.current >= AUTO_RESTART_FAILURES_THRESHOLD && !(await probeApiOnce());
+      confirmingRestartRef.current = false;
+      if (cancelled || !confirmedDown || apiFailuresRef.current === 0) return;
+      lastAutoRestartAtRef.current = Date.now();
       autoRestartAttemptsRef.current += 1;
       try {
         await fetch('/api/services/start-api', {
@@ -172,9 +197,9 @@ export default function SystemConsole() {
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ port: 8000 }),
         });
-        if (!cancelled) {
+        if (!cancelled && apiFailuresRef.current > 0) {
           setActionMessage(
-            `Auto-restarting API (attempt ${autoRestartAttemptsRef.current}/${AUTO_RESTART_MAX_ATTEMPTS}) — banner clears when /v1/health is 200.`,
+            `${AUTO_RESTART_MESSAGE_PREFIX} (attempt ${autoRestartAttemptsRef.current}/${AUTO_RESTART_MAX_ATTEMPTS}) — banner clears when /v1/health is 200.`,
           );
         }
       } catch {
@@ -202,6 +227,8 @@ export default function SystemConsole() {
         // counting fresh.
         apiFailuresRef.current = 0;
         everHealthyRef.current = true;
+        // First healthy probe clears a stale auto-restart message.
+        setActionMessage(m => (m && m.startsWith(AUTO_RESTART_MESSAGE_PREFIX) ? null : m));
       } else {
         apiFailuresRef.current += 1;
         void maybeAutoRestart();
@@ -325,6 +352,10 @@ export default function SystemConsole() {
     }
   }, []);
 
+  // Never show the auto-restart message beside a healthy API.
+  const shownMessage =
+    apiHealthy === true && actionMessage?.startsWith(AUTO_RESTART_MESSAGE_PREFIX) ? null : actionMessage;
+
   const apiChip = apiHealthy === null
     ? { label: 'API ?', color: '#71717a' }
     : apiHealthy
@@ -408,9 +439,9 @@ export default function SystemConsole() {
             precedence analysis was inverted). Render it here whenever the
             console is collapsed, in BOTH compact and non-compact modes;
             the expanded panel keeps its own copy. */}
-        {collapsed && actionMessage && (
-          <span className="truncate min-w-0 opacity-80" title={actionMessage}>
-            {actionMessage}
+        {collapsed && shownMessage && (
+          <span className="truncate min-w-0 opacity-80" title={shownMessage}>
+            {shownMessage}
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
@@ -493,8 +524,8 @@ export default function SystemConsole() {
               ? logs.lines.join('\n')
               : logs?.hint || 'waiting for log content…'}
           </pre>
-          {actionMessage && (
-            <div className="text-[10px] font-mono mt-1 opacity-90">{actionMessage}</div>
+          {shownMessage && (
+            <div className="text-[10px] font-mono mt-1 opacity-90">{shownMessage}</div>
           )}
         </div>
       )}

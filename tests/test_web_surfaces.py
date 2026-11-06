@@ -591,3 +591,13 @@ def test_empty_and_error_states_name_the_next_step() -> None:
     }
     for page, sentence in pins.items():
         assert sentence in _read(f"app/{page}/page.tsx"), page
+
+
+def test_auto_restart_message_clears_and_needs_two_failures() -> None:
+    console = _read("components/SystemConsole.tsx")
+    assert (
+        "m.startsWith(AUTO_RESTART_MESSAGE_PREFIX) ? null : m" in console
+    ), "first healthy probe clears the auto-restart message"
+    assert "apiHealthy === true && actionMessage?.startsWith(AUTO_RESTART_MESSAGE_PREFIX)" in console
+    assert "AUTO_RESTART_CONFIRM_GAP_MS = 5_000" in console
+    assert "!(await probeApiOnce())" in console, "a second failed probe must confirm before restart"

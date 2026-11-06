@@ -3,6 +3,19 @@
 ## [Unreleased]
 
 ### Fixed
+- **The first visit no longer stalls the API.** `POST /v1/wizard/reconnect`
+  (the welcome-back panel calls it once per tab) ran its probes, file scans
+  and safe repairs on the API's event loop for about twenty seconds, so every
+  other request waited behind it; the route now runs that work on a worker
+  thread (`asyncio.to_thread`, serialised by a lock so two tabs take turns)
+  and `GET /v1/health` answers in milliseconds while a reconnect is in
+  flight (pinned by `tests/test_wizard_reconnect_nonblocking.py`).
+- **The system console's auto-restart is harder to trip and its message
+  clears.** A restart now needs the failure streak plus one more failed probe
+  five seconds later (an aborted probe is a stall, not proof the API is
+  down), a healthy probe in between cancels it, the "Auto-restarting API"
+  message clears on the first healthy probe, and it is never shown beside
+  "ALL SYSTEMS GOOD".
 - **The WebUI reaches the API on Windows.** Every web-side default pointed
   at `localhost:8000` — the Next.js rewrite, the config and debug-report
   routes, the inline runtime base, the health banner and the system

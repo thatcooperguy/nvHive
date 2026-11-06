@@ -1974,7 +1974,10 @@ async def wizard_reconnect(
     """
     from nvh.integrations.wizard.reconnect import wizard_reconnect as run_reconnect
 
-    return _response_envelope(run_reconnect(home_dir=request.home_dir))
+    # The probes (nvidia-smi, Ollama, file scans) and repairs are blocking and take
+    # many seconds: run them on a worker thread so the loop keeps answering
+    # /v1/health and the rest while the reconnect is in flight.
+    return _response_envelope(await asyncio.to_thread(run_reconnect, home_dir=request.home_dir))
 
 
 class WizardChatToolOutcome(BaseModel):
