@@ -1091,7 +1091,10 @@ export default function ChatPage() {
     : null;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#ffffff] dark:bg-[#0a0a0a]">
+    // pt-6 clears the SystemConsole's collapsed strip (24px, fixed at the top on
+    // every page); without it the chat home's own bar — mode switch, pills — sat
+    // under that strip.
+    <div className="flex h-screen overflow-hidden pt-6 bg-[#ffffff] dark:bg-[#0a0a0a]">
       {/* Mobile sidebar overlay */}
       {mobileSidebarOpen && (
         <div

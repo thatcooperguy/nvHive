@@ -17,7 +17,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{
-          __html: `window.__HIVE_API_URL__ = ${JSON.stringify(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000')};`
+          __html: `window.__HIVE_API_URL__ = ${JSON.stringify(process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000')};`
         }} />
         {/*
           Inline pre-hydration theme bootstrap. Reads nvh_theme from

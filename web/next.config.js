@@ -17,7 +17,9 @@ const nextConfig = {
     return [
       {
         source: '/api/:path*',
-        destination: 'http://localhost:8000/:path*',
+        // 127.0.0.1, not localhost: Node resolves localhost to ::1 first on
+        // Windows 11 and the API binds IPv4 loopback, so the rewrite would fail.
+        destination: 'http://127.0.0.1:8000/:path*',
       },
     ];
   },

@@ -62,7 +62,7 @@ interface LogsResponse {
 const API_BASE: string =
   typeof window !== 'undefined' && (window as unknown as { __HIVE_API_URL__?: string }).__HIVE_API_URL__
     ? (window as unknown as { __HIVE_API_URL__: string }).__HIVE_API_URL__
-    : 'http://localhost:8000';
+    : 'http://127.0.0.1:8000';
 
 const COLLAPSED_KEY = 'nvh-system-console-collapsed';
 

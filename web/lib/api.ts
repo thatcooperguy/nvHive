@@ -139,7 +139,10 @@ function getSameHostApiBase(): string | null {
   if (typeof window === 'undefined') return null;
   try {
     const current = new URL(window.location.href);
-    return `${current.protocol}//${current.hostname}:8000`;
+    // The API binds IPv4 loopback by default; a page opened at localhost
+    // would otherwise probe ::1 first on Windows 11 and time out.
+    const host = current.hostname === 'localhost' ? '127.0.0.1' : current.hostname;
+    return `${current.protocol}//${host}:8000`;
   } catch {
     return null;
   }
@@ -160,8 +163,8 @@ function getApiBases(): string[] {
     runtimeUrl,
     envUrl,
     sameHostUrl,
-    'http://localhost:8000',
     'http://127.0.0.1:8000',
+    'http://localhost:8000',
   ];
   const seen = new Set<string>();
   return candidates.filter((candidate): candidate is string => {
@@ -172,7 +175,7 @@ function getApiBases(): string[] {
 }
 
 function getApiBase(): string {
-  return getApiBases()[0] ?? 'http://localhost:8000';
+  return getApiBases()[0] ?? 'http://127.0.0.1:8000';
 }
 
 // Legacy localStorage keys that previously held the API key. These are

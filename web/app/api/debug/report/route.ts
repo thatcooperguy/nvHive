@@ -366,8 +366,10 @@ function diagnose(
 }
 
 export async function GET() {
-  const apiUrl = 'http://localhost:8000/v1/health';
-  const ollamaUrl = 'http://localhost:11434/api/tags';
+  // 127.0.0.1, not localhost: Node resolves localhost to ::1 first on Windows
+  // 11 while both services bind IPv4 loopback.
+  const apiUrl = 'http://127.0.0.1:8000/v1/health';
+  const ollamaUrl = 'http://127.0.0.1:11434/api/tags';
 
   // Fire every probe in parallel — total wall time ≈ slowest single probe.
   const [apiProbe, ollamaProbe, doctor, ...logs] = await Promise.all([

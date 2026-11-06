@@ -167,6 +167,29 @@ lookup gated by `NVH_USE_KEYRING` like the registry (`nvh/core/voice.py`
 reword the POSIX kill bullet — the ubuntu run happened (CI run
 41351349212). Each closes its ROADMAP bullet in the same commit.
 
+**T3.10 Reconnect off the event loop (M, server).** `POST /v1/wizard/reconnect`
+(the welcome-back panel calls it once per tab) runs its probes and repairs
+synchronously on the API's single event loop for twenty seconds or more on
+this box ("Reconnect took 20812 ms"), so every other request — the health
+probe, the model list, the catalog — waits behind it; the health banner
+then declares the API down and auto-restarts it. Move the blocking work
+(subprocess probes, file scans) under `asyncio.to_thread`, or make the route
+start a job and return at once with the panel polling it. Files:
+`nvh/integrations/wizard/reconnect.py` (or wherever the route's helper
+lives — grep `def wizard_reconnect` in `nvh/api/server.py`), its tests.
+Done when `GET /v1/health` answers in under a second while a reconnect is in
+flight (a test with a slow fake probe, like `tests/test_voice.py`'s
+non-blocking-loop test).
+
+**T3.11 The auto-restart message clears (S, web).** When the health banner's
+auto-restart fires, the system console strip shows "Auto-restarting API
+(attempt 1/3) — banner clears when /v1/health is 200" and keeps showing it
+beside "ALL SYSTEMS GOOD" after health is 200 again. Clear it on the first
+healthy probe, and do not start an auto-restart while a reconnect is in
+flight (the banner can read the reconnect's pending state, or wait for two
+consecutive failed probes). Files: `web/components/ApiHealthBanner.tsx`,
+`web/components/SystemConsole.tsx`; pins in `tests/test_web_surfaces.py`.
+
 ## Wave S4 — consistency and screenshots
 
 **T4.1 One header (M).** Every page under LayoutShell uses

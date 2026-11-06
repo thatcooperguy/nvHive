@@ -96,7 +96,7 @@ nvh serve --port 8000          # terminal 1: the API
 cd web && npm install && npm run dev   # terminal 2: dev server on :3000
 ```
 
-`NEXT_PUBLIC_API_URL` (default `http://localhost:8000`) tells the browser
+`NEXT_PUBLIC_API_URL` (default `http://127.0.0.1:8000` — the loopback address the API binds; `localhost` can resolve to IPv6 first on Windows) tells the browser
 where the API is. `nvh webui --dev` runs the same dev server from the
 installed copy; `nvh webui --clean` wipes `node_modules` and `.next` when the
 bundled build drifts from the backend. CI type-checks (`npx tsc --noEmit`),

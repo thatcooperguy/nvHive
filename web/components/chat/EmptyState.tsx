@@ -11,17 +11,19 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import AgentAvatar from '@/components/AgentAvatar';
-import { getInstallJobs, getModels, getWizardContext, type AgentProfileSchema } from '@/lib/api';
+import { getInstallJobs, getInstalledModels, getWizardContext, type AgentProfileSchema, type InstalledModel } from '@/lib/api';
 import { FALLBACK_STARTERS, firstRunLines } from '@/lib/firstRun';
 import { sayMascotTip } from '@/lib/mascot';
 import type { InstallJob } from '@/lib/types';
 
 const FIRST_RUN_TIP_KEY = 'nvh.firstRun.tip';
 
-/** Local model name from the Ollama rows of `GET /v1/models`, or null. */
-function firstLocalModel(models: { provider: string; model_id: string }[]): string | null {
-  const row = models.find(m => m.provider === 'ollama');
-  return row ? row.model_id : null;
+/** The first installed Ollama chat model (`GET /v1/ollama/models`), skipping
+ * embedding models, or null. `GET /v1/models` is the cloud catalog and has no
+ * local rows, so it cannot answer this. */
+function firstLocalModel(models: InstalledModel[]): string | null {
+  const row = models.find(m => !/embed/i.test(m.name)) ?? models[0];
+  return row ? row.name : null;
 }
 
 /** A running pull job's model and size, from the install job list, or null. */
@@ -80,7 +82,7 @@ export default function EmptyState({
     let cancelled = false;
     void (async () => {
       const [models, jobs, context] = await Promise.all([
-        getModels().catch(() => null),
+        getInstalledModels().catch(() => null),
         getInstallJobs({ limit: 8, exclude_kind: 'schedule-run' }).catch(() => null),
         getWizardContext().catch(() => null),
       ]);

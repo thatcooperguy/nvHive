@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Fixed
+- **The WebUI reaches the API on Windows.** Every web-side default pointed
+  at `localhost:8000` — the Next.js rewrite, the config and debug-report
+  routes, the inline runtime base, the health banner and the system
+  console — and on Windows 11 `localhost` resolves to IPv6 first while the
+  API binds IPv4 loopback, so a page opened at `localhost:3000` probed
+  `::1`, timed out and showed "API down" beside a running server. The
+  defaults are `127.0.0.1:8000` now and a page opened at `localhost` derives
+  its API base as `127.0.0.1` too.
+- **The chat home's top bar no longer sits under the system console's
+  strip** (the mode switch and the pills were hidden behind it).
+- **The first-run model line reads the installed Ollama models.** It looked
+  for local rows in the cloud catalog (`GET /v1/models` has none) and said
+  "No local model yet" with two models installed; it reads
+  `GET /v1/ollama/models` and skips embedding models.
+
 ### Changed
 - **One header and plain-word states.** Every page under the shell uses the
   shared page header (Setup gained it; its section titles stay), and the

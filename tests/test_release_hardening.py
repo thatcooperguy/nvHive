@@ -999,8 +999,9 @@ def test_debug_report_button_aggregates_everything_for_phone_sharing() -> None:
     for filename in ("api-server.log", "webui-bootstrap.log", "ollama.log", "install.log"):
         assert filename in report_route
     # Probes API + Ollama.
-    assert "localhost:8000/v1/health" in report_route
-    assert "localhost:11434/api/tags" in report_route
+    # 127.0.0.1, not localhost: Node resolves localhost to ::1 first on Windows 11 (0.47).
+    assert "127.0.0.1:8000/v1/health" in report_route
+    assert "127.0.0.1:11434/api/tags" in report_route
     # Runs nvh doctor --json with a bounded timeout.
     assert "doctor" in report_route and "--json" in report_route
     assert "timeout:" in report_route

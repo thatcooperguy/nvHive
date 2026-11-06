@@ -545,7 +545,7 @@ def test_empty_state_renders_the_three_first_run_lines() -> None:
     assert "firstRunLines({" in empty
     assert "lines.model" in empty and "lines.later" in empty
     assert 'href="/setup"' in empty
-    for call in ("getModels()", "getInstallJobs(", "getWizardContext()"):
+    for call in ("getInstalledModels()", "getInstallJobs(", "getWizardContext()"):
         assert call in empty, call
     assert "nvh.firstRun.tip" in empty
     assert "Ask me what this machine can do" in empty
