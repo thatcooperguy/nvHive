@@ -36,7 +36,10 @@ credentials, checked in this order (`require_auth` in `nvh/api/deps.py`, which
    entries (`nvh/auth/auth.py`: passwords are stored as bcrypt hashes, API
    tokens are shown once and stored as SHA-256 hashes);
 2. the single `HIVE_API_KEY` environment variable, accepted as
-   `Authorization: Bearer <key>` or `X-Hive-API-Key: <key>`.
+   `Authorization: Bearer <key>`, `X-Hive-API-Key: <key>` or, since 0.47.0,
+   `x-api-key: <key>` (the header the Anthropic SDKs send, so
+   `ANTHROPIC_API_KEY=<key>` authenticates against the Anthropic paths); the
+   three spellings are one credential and the 401 detail names them all.
 
 **Open mode** is what you have whenever `HIVE_API_KEY` is unset
 (`_get_council_api_key` returns `None`): a request that presents no credential,
@@ -370,8 +373,9 @@ runs `pip-audit` over that resolved set on every push to `main`, every pull
 request against it and on manual dispatch (`.github/workflows/ci.yml`; it
 reports findings as warnings rather than failing the build).
 
-Findings accepted at 0.46.0. The first audit that produced a result (the run
-for `0231a9e`, after `--strict` was dropped) listed thirteen advisories
+Findings accepted at 0.46.0 and again at 0.47.0. The first audit that
+produced a result (the run for `0231a9e`, after `--strict` was dropped)
+listed thirteen advisories
 against `filelock` 3.32.7 (CVE-2026-112907 through CVE-2026-112940; fixed in
 4.2.1, one in 4.0.9). `filelock` is not a dependency nvHive names or imports:
 it arrives through `litellm`, which pins `filelock<4.0,>=3.16.1`, and through
@@ -380,8 +384,10 @@ its pin. The advisories concern the lock classes' handling of planted
 symlinks, side files and file modes in the directory that holds a lock, and
 need a local user who can create names in that directory; nvHive's caches
 live under the user-owned `NVH_HOME` layout. The finding is accepted for
-0.46.0 and the floor moves to `filelock>=4.2.1` as soon as litellm allows it
-(the weekly model-currency run and Dependabot surface that release).
+0.46.0 and re-accepted for 0.47.0 (the run for `e99d3c2`, the last `main`
+run before that tag, lists the same thirteen; litellm still pins `<4.0`), and
+the floor moves to `filelock>=4.2.1` as soon as litellm allows it (the weekly
+model-currency run and Dependabot surface that release).
 
 With the MCP SDK 2.x line (what `pip install "nvhive[mcp]"` resolves today;
 mcp 1.x does not require it) and with recent FastAPI releases in the `serve`
