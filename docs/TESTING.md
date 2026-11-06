@@ -91,7 +91,7 @@ files are guards rather than unit tests:
 - **Web** - `cd web && npm test` runs Node's built-in runner over
   `web/lib/*.test.mjs` (`node --test lib/*.test.mjs`): `cost`, `privileged`,
   `mascot` (through `lib/mascotRules.ts`), `apiShapes`, `vaultNotes`,
-  `sessionCost`, `schedules`, `attachments`, `cabinets`, `gpu`, `voice`. The `.mjs`
+  `sessionCost`, `schedules`, `attachments`, `cabinets`, `gpu`, `voice`, `firstRun`. The `.mjs`
   files import the `.ts` helpers by explicit extension through Node's type
   stripping, so a helper under test stays pure: no React, no DOM, no
   `'use client'`, no Next import, no `@/` alias and no runtime import of

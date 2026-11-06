@@ -8,21 +8,34 @@
  * component only reports picks.
  */
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import AgentAvatar from '@/components/AgentAvatar';
-import type { AgentProfileSchema } from '@/lib/api';
+import { getInstallJobs, getModels, getWizardContext, type AgentProfileSchema } from '@/lib/api';
+import { FALLBACK_STARTERS, firstRunLines } from '@/lib/firstRun';
+import { sayMascotTip } from '@/lib/mascot';
+import type { InstallJob } from '@/lib/types';
 
-// Per-agent starter prompts shown on the empty Wizard state. Picking a card
-// both swaps the active profile AND seeds the composer with an on-persona
-// question, so first-time users get a "click → ready to send" experience.
-const AGENT_STARTERS: Record<string, string> = {
-  wizard: 'What can my GPU run right now, and what should I fix first?',
-  coder: 'Review the diff in my current branch — call out the riskiest change.',
-  researcher: 'Summarize the latest on Llama 4 release vs Llama 3, with sources.',
-  writer: 'Help me draft a launch announcement for an internal tool.',
-  ops: 'Run a safe repair pass and tell me what changed.',
-  'vault-rag': 'What did I write about my mount-autopilot setup last week?',
-};
+const FIRST_RUN_TIP_KEY = 'nvh.firstRun.tip';
+
+/** Local model name from the Ollama rows of `GET /v1/models`, or null. */
+function firstLocalModel(models: { provider: string; model_id: string }[]): string | null {
+  const row = models.find(m => m.provider === 'ollama');
+  return row ? row.model_id : null;
+}
+
+/** A running pull job's model and size, from the install job list, or null. */
+function runningPull(jobs: InstallJob[]): { model: string; bytes: number } | null {
+  const job = jobs.find(
+    j => (j.status === 'running' || j.status === 'queued')
+      && (j.kind === 'wizard-mission' || j.kind === 'studio-model-install'),
+  );
+  if (!job) return null;
+  const req = job.request ?? {};
+  const model = typeof req.model === 'string' && req.model ? req.model : job.title;
+  const bytes = typeof req.size_bytes === 'number' ? req.size_bytes : 0;
+  return { model, bytes };
+}
 
 export default function EmptyState({
   onPickPrompt,
@@ -36,20 +49,68 @@ export default function EmptyState({
   onPickAgent: (name: string) => void;
 }) {
   // Adaptive starters — seeded from the reconnect payload so the Wizard's
-  // suggestions match the user's actual workspace state. Falls back to the
-  // generic set when reconnect is unavailable (cold first boot, offline, etc.).
-  const [starters, setStarters] = useState<string[]>([
-    'What can my GPU run right now?',
-    "Why isn't Ollama responding?",
-    'Help me pick a mission for image gen.',
-    'Refresh the local model list.',
-  ]);
+  // suggestions match the user's actual workspace state. Null falls back to
+  // the agent profiles' `starter` fields (lib/firstRun.ts holds the
+  // last-resort list) when reconnect is unavailable (cold boot, offline).
+  const [adaptive, setAdaptive] = useState<string[] | null>(null);
+  // Machine state behind the first-run model line.
+  const [localModel, setLocalModel] = useState<string | null>(null);
+  const [pulling, setPulling] = useState<{ model: string; bytes: number } | null>(null);
+  const [gpu, setGpu] = useState(false);
   // Proactive repair nudge — when reconnect surfaces unhealthy receipts or
   // attention items we render a single-line banner above the agent grid so
   // the user sees the problem before they pick an agent. One-click = fire
   // off the repair-workspace tool via a "Fix this" prompt.
   const [proactiveNudge, setProactiveNudge] = useState<{ text: string; prompt: string } | null>(null);
   const agentList = Array.from(profileMap.values()).slice(0, 6);
+  const lines = firstRunLines({
+    localModel,
+    pulling,
+    gpu,
+    // No call on this surface exposes the key count, so it stays unknown (0)
+    // and no line depends on it.
+    keyCount: 0,
+    starters: Array.from(profileMap.values()).map(p => p.starter ?? ''),
+  });
+  const starters = adaptive ?? lines.starters;
+
+  // First-run state: local model, running pull, GPU. Each call is
+  // best-effort; a failure leaves the line on its "no model yet" wording.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const [models, jobs, context] = await Promise.all([
+        getModels().catch(() => null),
+        getInstallJobs({ limit: 8, exclude_kind: 'schedule-run' }).catch(() => null),
+        getWizardContext().catch(() => null),
+      ]);
+      if (cancelled) return;
+      if (models) setLocalModel(firstLocalModel(models.models));
+      if (jobs) setPulling(runningPull(jobs.jobs));
+      const gpuBlock = (context as { gpu?: { detected?: boolean } } | null)?.gpu;
+      setGpu(gpuBlock?.detected === true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // One mascot tip per session on the first run. The session key is written
+  // only once the bubble actually showed (a hidden mascot consumes nothing);
+  // storage may be blocked, then the tip's own id limits it to once per load.
+  useEffect(() => {
+    try {
+      if (window.sessionStorage.getItem(FIRST_RUN_TIP_KEY)) return;
+    } catch {
+      /* storage blocked */
+    }
+    if (!sayMascotTip('Ask me what this machine can do', { id: 'first-run' })) return;
+    try {
+      window.sessionStorage.setItem(FIRST_RUN_TIP_KEY, '1');
+    } catch {
+      /* storage blocked */
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,31 +119,31 @@ export default function EmptyState({
         const { wizardReconnect } = await import('@/lib/api');
         const r = await wizardReconnect();
         if (cancelled) return;
-        const adaptive: string[] = [];
+        const adaptiveList: string[] = [];
         // First-run user → walk them through setup directly.
         if (r.first_run) {
-          adaptive.push('Walk me through setting up this workspace from scratch.');
+          adaptiveList.push('Walk me through setting up this workspace from scratch.');
         }
         // Concrete attention items → surface the top one as a starter.
         for (const item of r.needs_attention.slice(0, 2)) {
           const title = (item as { title?: string }).title;
           if (typeof title === 'string' && title.length > 0) {
-            adaptive.push(`Help me with: ${title}`);
+            adaptiveList.push(`Help me with: ${title}`);
           }
         }
         // Auto-repair already ran? Offer to summarize what just happened.
         if (r.auto_repaired.length > 0) {
-          adaptive.push('What did you just auto-repair, and what should I check?');
+          adaptiveList.push('What did you just auto-repair, and what should I check?');
         }
         // Vault present → invite recall-style questions.
         const vaultNotes = (r as unknown as { vault?: { memory_files?: number } })?.vault?.memory_files ?? 0;
         if (vaultNotes > 0) {
-          adaptive.push('What did I write about in my vault recently?');
+          adaptiveList.push('What did I write about in my vault recently?');
         }
-        if (adaptive.length > 0) {
+        if (adaptiveList.length > 0) {
           // Always keep one generic fallback so the grid never looks empty.
-          adaptive.push('What can my GPU run right now?');
-          setStarters(adaptive.slice(0, 4));
+          adaptiveList.push(FALLBACK_STARTERS[0]);
+          setAdaptive(adaptiveList.slice(0, 4));
         }
 
         // Proactive nudge: build a one-line "I noticed X looks broken — want
@@ -157,7 +218,7 @@ export default function EmptyState({
                 type="button"
                 onClick={() => {
                   onPickAgent(p.name);
-                  const starter = AGENT_STARTERS[p.name];
+                  const starter = p.starter?.trim();
                   if (starter) onPickPrompt(starter);
                 }}
                 className="flex items-start gap-2 rounded-md border p-2 text-left transition-colors hover:border-[#76B900]/40"
@@ -188,6 +249,14 @@ export default function EmptyState({
         </div>
       )}
 
+      <div
+        className="mt-4 text-center text-xs"
+        style={{ color: 'var(--text-secondary)' }}
+        data-testid="first-run-model-line"
+      >
+        {lines.model}
+      </div>
+
       <div className="mt-6 text-center">
         <div className="text-[10px] font-mono uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>
           Or jump straight in
@@ -209,6 +278,11 @@ export default function EmptyState({
             {s}
           </button>
         ))}
+      </div>
+      <div className="mt-4 text-center text-[11px]" style={{ color: 'var(--text-muted)' }}>
+        <Link href="/setup" className="underline-offset-2 hover:underline">
+          {lines.later}
+        </Link>
       </div>
     </div>
   );

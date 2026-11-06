@@ -316,6 +316,7 @@ NEW_PURE_HELPERS = {
     "sessionCost": "sessionCost.test.mjs",
     "schedules": "schedules.test.mjs",
     "voice": "voice.test.mjs",
+    "firstRun": "firstRun.test.mjs",
 }
 
 RUNTIME_IMPORT = re.compile(r"^import\s+(?!type\b)", re.MULTILINE)
@@ -514,3 +515,54 @@ def test_chat_home_follows_new_wizard_thread_and_has_narrow_mode_switch() -> Non
     assert page.count("MODE_TABS.map(") >= 2
     assert page.count('aria-label="Chat mode"') == 2
     assert "sm:hidden rounded-md" in page
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# The guided first run (0.47 S3): three lines in the empty state, one action
+# on each banner
+# ───────────────────────────────────────────────────────────────────────────
+
+
+def test_empty_state_reads_starters_from_the_profiles_not_a_typed_list() -> None:
+    empty = _read("components/chat/EmptyState.tsx")
+    assert "p.starter" in empty, "starters come from the agent profiles' `starter` field"
+    assert "AGENT_STARTERS" not in empty
+    for typed in (
+        "Why isn't Ollama responding?",
+        "Help me pick a mission for image gen.",
+        "Refresh the local model list.",
+        "Review the diff in my current branch",
+    ):
+        assert typed not in empty, f"hand-typed starter {typed!r} must live nowhere in EmptyState"
+    # The only fallback list is the pure helper's.
+    assert "Summarise a file" in _read("lib/firstRun.ts")
+    assert "Summarise a file" not in empty
+
+
+def test_empty_state_renders_the_three_first_run_lines() -> None:
+    empty = _read("components/chat/EmptyState.tsx")
+    assert "import { FALLBACK_STARTERS, firstRunLines } from '@/lib/firstRun'" in empty
+    assert "firstRunLines({" in empty
+    assert "lines.model" in empty and "lines.later" in empty
+    assert 'href="/setup"' in empty
+    for call in ("getModels()", "getInstallJobs(", "getWizardContext()"):
+        assert call in empty, call
+    assert "nvh.firstRun.tip" in empty
+    assert "Ask me what this machine can do" in empty
+    assert "sayMascotTip(" in empty
+
+
+def test_first_run_docs_name_the_lines_and_the_tip() -> None:
+    assert "nvh.firstRun.tip" in _doc("MASCOT.md")
+    webui = _doc("WEBUI.md")
+    assert "web/lib/firstRun.ts" in webui and "`firstRun`" in webui
+    assert "`firstRun`" in _doc("TESTING.md")
+
+
+def test_banners_end_with_one_action() -> None:
+    banner = _read("components/ApiHealthBanner.tsx")
+    assert "Start the API" in banner
+    assert "/api/services/start-api" in banner, "same bridge route SystemConsole posts to"
+    assert "/api/services/start-api" in _read("components/SystemConsole.tsx")
+    welcome = _read("components/WelcomeBackPanel.tsx")
+    assert "Open the console" in welcome

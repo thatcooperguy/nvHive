@@ -78,6 +78,7 @@ export default function ApiHealthBanner() {
   const [consecutiveFailures, setConsecutiveFailures] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [starting, setStarting] = useState(false);
 
   // Captured once, in the mount effect. We deliberately do NOT reset this
   // on re-render so the "starting" window is anchored to component mount.
@@ -177,6 +178,24 @@ export default function ApiHealthBanner() {
     }
   };
 
+  // The same bridge SystemConsole's Restart API button posts to
+  // (`/api/services/start-api`, port 8000); the console's chip and this
+  // banner clear together once /v1/health answers.
+  const startApi = async () => {
+    setStarting(true);
+    try {
+      await fetch('/api/services/start-api', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ port: 8000 }),
+      });
+    } catch {
+      // The bridge itself is down; the probe loop keeps the banner honest.
+    } finally {
+      setStarting(false);
+    }
+  };
+
   // Render nothing on the happy path or while we're still figuring out
   // whether the API is just slow to wake up.
   if (status !== 'down' && status !== 'starting') return null;
@@ -270,6 +289,15 @@ export default function ApiHealthBanner() {
           style={{ background: palette.text, color: palette.bg }}
         >
           {retrying ? 'Retrying…' : 'Retry now'}
+        </button>
+        <button
+          type="button"
+          onClick={() => void startApi()}
+          disabled={starting}
+          className="font-mono uppercase tracking-wider text-[10px] px-3 py-1 disabled:opacity-50"
+          style={{ background: palette.text, color: palette.bg }}
+        >
+          {starting ? 'Starting…' : 'Start the API'}
         </button>
         <button
           type="button"

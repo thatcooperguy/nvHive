@@ -16,6 +16,7 @@
  *    of the tab session — coming back after a real reconnect re-opens it.
  */
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { wizardReconnect, type WizardReconnectResult } from '@/lib/api';
 
@@ -191,6 +192,14 @@ export default function WelcomeBackPanel() {
       <div className="mt-3 text-[10px] font-mono" style={{ color: 'var(--text-faint)' }}>
         Reconnect took {result.elapsed_ms} ms.
       </div>
+
+      <Link
+        href="/system"
+        className="mt-3 inline-block font-mono text-[10px] uppercase tracking-[0.14em] hover:underline"
+        style={{ color: '#76B900' }}
+      >
+        Open the console
+      </Link>
     </div>
   );
 }

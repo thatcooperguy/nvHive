@@ -46,6 +46,12 @@ function isDeliberateRefusalMessage(message: Message): boolean {
   );
 }
 
+/** The next step shown under a specialist's refusal, after the sentence the
+ * server wrote (the bubble text, the one the CLI prints). The reason code
+ * itself is never shown. */
+const LOCAL_ONLY_NEXT_STEP =
+  'Add a key in Settings → Connections, or install a local model in Models.';
+
 /** The footer's cost pill: "$x" when priced, "$0.0000" when a priced model
  * cost nothing (never hidden), "cost unknown" with a hover explanation when
  * the catalog has no price for the model (`cost_known: false`) — lib/cost.ts. */
@@ -232,6 +238,12 @@ export default function MessageBlock({
               <> (${message.costCeilingUsd.toFixed(2)}/turn)</>
             )}
             . Follow-up tool calls were skipped to stay under cost.
+          </div>
+        )}
+
+        {isDeliberateRefusalMessage(message) && (
+          <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+            {LOCAL_ONLY_NEXT_STEP}
           </div>
         )}
 

@@ -150,3 +150,23 @@ def test_offline_helper_footer_is_skipped_for_a_refusal() -> None:
         r"<div[^>]*>\s*offline helper",
         chat,
     )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# The refusal reads as a sentence with a next step, never as the reason code
+# ───────────────────────────────────────────────────────────────────────────
+
+
+def test_refusal_shows_the_next_step_not_the_reason_code() -> None:
+    chat = _read("components/chat/MessageBlock.tsx")
+    assert (
+        "'Add a key in Settings → Connections, or install a local model in Models.'" in chat
+    )
+    shown = _block(
+        chat, "{isDeliberateRefusalMessage(message) && (", "{LOCAL_ONLY_NEXT_STEP}"
+    )
+    assert "LOCAL_ONLY_NEXT_STEP" in shown
+    # The code is never rendered as text: no JSX expression prints the reason.
+    assert "{message.fallbackReason}" not in chat
+    assert "{event.fallback_reason}" not in _read("components/chat/WizardThread.tsx")
+    assert LOCAL_ONLY_FALLBACK_REASON not in chat
