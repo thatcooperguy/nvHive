@@ -2,51 +2,50 @@
 
 ## [Unreleased]
 
-### Changed
-- **Screenshots retaken on the merged home.** Three 1440×900 captures
-  (`chat-home.png`, `models.png`, `connections.png`) replace the seven from
-  April–August that showed a sidebar and a theme that no longer exist;
-  README embeds the chat home and WEBUI.md's gallery shows all three.
+## [0.47.0] - 2026-11-06
 
-### Fixed
-- **The first visit no longer stalls the API.** `POST /v1/wizard/reconnect`
-  (the welcome-back panel calls it once per tab) ran its probes, file scans
-  and safe repairs on the API's event loop for about twenty seconds, so every
-  other request waited behind it; the route now runs that work on a worker
-  thread (`asyncio.to_thread`, serialised by a lock so two tabs take turns)
-  and `GET /v1/health` answers in milliseconds while a reconnect is in
-  flight (pinned by `tests/test_wizard_reconnect_nonblocking.py`).
-- **The system console's auto-restart is harder to trip and its message
-  clears.** A restart now needs the failure streak plus one more failed probe
-  five seconds later (an aborted probe is a stall, not proof the API is
-  down), a healthy probe in between cancels it, the "Auto-restarting API"
-  message clears on the first healthy probe, and it is never shown beside
-  "ALL SYSTEMS GOOD".
-- **The WebUI reaches the API on Windows.** Every web-side default pointed
-  at `localhost:8000` — the Next.js rewrite, the config and debug-report
-  routes, the inline runtime base, the health banner and the system
-  console — and on Windows 11 `localhost` resolves to IPv6 first while the
-  API binds IPv4 loopback, so a page opened at `localhost:3000` probed
-  `::1`, timed out and showed "API down" beside a running server. The
-  defaults are `127.0.0.1:8000` now and a page opened at `localhost` derives
-  its API base as `127.0.0.1` too.
-- **The chat home's top bar no longer sits under the system console's
-  strip** (the mode switch and the pills were hidden behind it).
-- **The first-run model line reads the installed Ollama models.** It looked
-  for local rows in the cloud catalog (`GET /v1/models` has none) and said
-  "No local model yet" with two models installed; it reads
-  `GET /v1/ollama/models` and skips embedding models.
+The simplify release: a first-time user should open nvHive and have it just
+work, so the surface got smaller and every dead end got a next step. One chat
+home: `/` hosts the Wizard as its default mode with Ask (one model), Convene
+(council) and Poll (compare) as the other modes of the same page, switched in
+the top bar; the C1b shell merge held out of 0.46 landed once O9 was given
+(2026-11-05), `/wizard` is a one-release redirect that renames
+`?conversation=` to `?c=`, every thread link is `/?c=<id>`, the sidebar
+follows a new Wizard thread as soon as it exists, and Enter sends in every
+mode. The sidebar shows five destinations (Chat, Models, Agents, Memory,
+Schedules) and a Settings group that holds the other six pages under plain
+names; no route changed. The chat's empty state is a guided first run derived
+from the machine (your local model, three starters drawn from the agent
+profiles, where keys, ports and packs live), every banner ends with one
+action, the deliberate local-only refusal says what to do next, and every
+page's empty, loading and error state ends with the one next step in plain
+words under one shared header. The README was rewritten for the ten-second
+read and the screenshots retaken on the merged home. Underneath, the 0.46
+follow-ups that caused a dead end are closed: `x-api-key` is a second
+spelling of the API credential (the Anthropic SDKs work against the Anthropic
+paths), a transcript that ends in a tool message is forwarded as history,
+`Scheduler._save` holds a file lock across processes, the session cost block
+counts its pairs so an idle tab no longer reads `local only`, the Groq
+keyring lookup honours `NVH_USE_KEYRING`, and `nvh test` gains a first-answer
+smoke check. Three first-visit bugs found by taking the screenshots against
+a live stack are fixed: the WebUI's defaults named `localhost`, which Windows
+11 resolves to IPv6 first while the API binds IPv4 loopback (every default is
+`127.0.0.1:8000` now); the welcome-back panel's reconnect ran on the API's
+event loop for about twenty seconds, which is what made the system console
+auto-restart a healthy API; and the auto-restart message never cleared.
+`nvh launch claude` is verified against Claude Code 2.1.257. The plan is
+`docs/proposals/SIMPLIFY_0_47_DESIGN_2026-11.md`, worked as the tickets of
+`docs/proposals/SIMPLIFY_0_47_GAMEPLAN_2026-11.md` by smaller-model sessions
+with one integrator (#144).
 
-### Changed
-- **One header and plain-word states.** Every page under the shell uses the
-  shared page header (Setup gained it; its section titles stay), and the
-  empty, loading and error states of Memory, Schedules, Agents and Models
-  each end with the one next step in plain words — "Save a note from the
-  chat with /save, or add one above", "Create one below — ask or convene,
-  every 30m, 1h or 1d", "Press + Create your first agent to add one",
-  "Start the API from the console at the top, then reload" — with no reason
-  codes and no pointer to logs. The Schedules page no longer names the CLI
-  twin in its empty state.
+Not in this release: a `/v1/responses` endpoint. Codex CLI 0.152.1 refuses
+`wire_api = "chat"` and speaks only the Responses API, so the `codex` launch
+snippet does not load on current Codex until nvHive serves that endpoint
+(0.48). Persistence unification (two transports and two persistence paths
+behind the chat) and the retirement of the `/query`, `/council` and `/wizard`
+redirects (O14) are 0.48. The agent profiles' `background` and `accent` are
+typed but not drawn on `/agents`. The `LOCAL_MODEL_TIERS` qwen3.6 review stays
+an owner decision and the mascot's real-person likeness still needs sign-off.
 
 ### Added
 - **A "first answer" smoke check.** `nvh test` / `nvh status --smoke` gain
@@ -94,18 +93,6 @@
   record another process saved since this instance loaded is folded in, so
   `nvh schedule add` racing the API runner keeps both records; a record this
   instance removed stays removed.
-
-### Changed
-- **The Groq keyring lookup honours `NVH_USE_KEYRING`** exactly as the
-  provider registry does (`1`, `true` or `yes`); with it off, `keyring` is
-  never imported by the voice path.
-- **`nvh launch` targets:** `claude` is verified against Claude Code 2.1.257
-  (`verified_on: 2026-11-05`); the `codex` row records that Codex CLI
-  0.152.1 refuses `wire_api = "chat"` and speaks only the Responses API,
-  which nvHive does not serve yet, so that snippet does not load on current
-  Codex (a `/v1/responses` endpoint is the follow-up).
-
-### Added (earlier in this cycle)
 - **The chat home follows a new Wizard thread and switches modes on a
   phone.** When the Wizard creates its conversation on the first message the
   sidebar highlights it at once (the page reads the `?c=` the thread wrote
@@ -135,6 +122,27 @@
   mounts `WizardThread` for the default mode.
 
 ### Changed
+- **Screenshots retaken on the merged home.** Three 1440×900 captures
+  (`chat-home.png`, `models.png`, `connections.png`) replace the seven from
+  April–August that showed a sidebar and a theme that no longer exist;
+  README embeds the chat home and WEBUI.md's gallery shows all three.
+- **One header and plain-word states.** Every page under the shell uses the
+  shared page header (Setup gained it; its section titles stay), and the
+  empty, loading and error states of Memory, Schedules, Agents and Models
+  each end with the one next step in plain words — "Save a note from the
+  chat with /save, or add one above", "Create one below — ask or convene,
+  every 30m, 1h or 1d", "Press + Create your first agent to add one",
+  "Start the API from the console at the top, then reload" — with no reason
+  codes and no pointer to logs. The Schedules page no longer names the CLI
+  twin in its empty state.
+- **The Groq keyring lookup honours `NVH_USE_KEYRING`** exactly as the
+  provider registry does (`1`, `true` or `yes`); with it off, `keyring` is
+  never imported by the voice path.
+- **`nvh launch` targets:** `claude` is verified against Claude Code 2.1.257
+  (`verified_on: 2026-11-05`); the `codex` row records that Codex CLI
+  0.152.1 refuses `wire_api = "chat"` and speaks only the Responses API,
+  which nvHive does not serve yet, so that snippet does not load on current
+  Codex (a `/v1/responses` endpoint is the follow-up).
 - **The README says what happens.** Rewritten for the ten-second read: one
   sentence, the one command, four lines on what the installer does before the
   browser opens, what you get in the user's words, who it is for, how to get
@@ -153,6 +161,43 @@
   new labels. The `/query` and `/council` redirect comment in
   `web/next.config.js` now carries the O14 date (they retire with the
   `/wizard` redirect that follows the shell merge).
+
+### Fixed
+- **The first visit no longer stalls the API.** `POST /v1/wizard/reconnect`
+  (the welcome-back panel calls it once per tab) ran its probes, file scans
+  and safe repairs on the API's event loop for about twenty seconds, so every
+  other request waited behind it; the route now runs that work on a worker
+  thread (`asyncio.to_thread`, serialised by a lock so two tabs take turns)
+  and `GET /v1/health` answers in milliseconds while a reconnect is in
+  flight (pinned by `tests/test_wizard_reconnect_nonblocking.py`).
+- **The system console's auto-restart is harder to trip and its message
+  clears.** A restart now needs the failure streak plus one more failed probe
+  five seconds later (an aborted probe is a stall, not proof the API is
+  down), a healthy probe in between cancels it, the "Auto-restarting API"
+  message clears on the first healthy probe, and it is never shown beside
+  "ALL SYSTEMS GOOD".
+- **The WebUI reaches the API on Windows.** Every web-side default pointed
+  at `localhost:8000` — the Next.js rewrite, the config and debug-report
+  routes, the inline runtime base, the health banner and the system
+  console — and on Windows 11 `localhost` resolves to IPv6 first while the
+  API binds IPv4 loopback, so a page opened at `localhost:3000` probed
+  `::1`, timed out and showed "API down" beside a running server. The
+  defaults are `127.0.0.1:8000` now and a page opened at `localhost` derives
+  its API base as `127.0.0.1` too.
+- **The chat home's top bar no longer sits under the system console's
+  strip** (the mode switch and the pills were hidden behind it).
+- **The first-run model line reads the installed Ollama models.** It looked
+  for local rows in the cloud catalog (`GET /v1/models` has none) and said
+  "No local model yet" with two models installed; it reads
+  `GET /v1/ollama/models` and skips embedding models.
+
+### Security
+- **SECURITY.md re-read for 0.47.0** (its own commit, per MAINTAINERS item 6):
+  the credential section names `x-api-key` as the third spelling of
+  `HIVE_API_KEY`, and the accepted `filelock` finding is re-accepted at
+  0.47.0 — the `security` job on the last `main` run before the tag lists
+  the same thirteen advisories against 3.32.7, litellm still pins `<4.0`,
+  and nvHive imports none of it. No new finding.
 
 ## [0.46.0] - 2026-11-02
 

@@ -27,8 +27,8 @@ python -m pytest tests/ -q
 #   nvh/integrations/workspace/vault.py — lands in its own commit before
 #   this one; the list below is the release commit alone
 git add CHANGELOG.md pyproject.toml nvh/__init__.py web/lib/version.ts README.md docs/ .github/ISSUE_TEMPLATE/
-git commit -s -m "Release 0.46.0: <one-line theme>" && git push
-git tag v0.46.0 && git push origin v0.46.0
+git commit -s -m "Release 0.47.0: <one-line theme>" && git push
+git tag v0.47.0 && git push origin v0.47.0
 ```
 
 `web/package.json` and `vscode-nvhive/package.json` stay at `0.1.0` by
@@ -47,7 +47,7 @@ workflow file `publish.yml`, repository `thatcooperguy/nvHive`). It also
 accepts `workflow_dispatch` as a recovery path:
 
 ```bash
-gh workflow run publish.yml --ref v0.46.0 -f target=pypi
+gh workflow run publish.yml --ref v0.47.0 -f target=pypi
 ```
 
 Expect 6–10 minutes for the GitHub Release (binary builds dominate) plus a
@@ -134,7 +134,7 @@ minute for PyPI.
 ### Verifying, yanking, rolling back
 
 ```bash
-python -m venv /tmp/verify && /tmp/verify/bin/pip install nvhive==0.46.0
+python -m venv /tmp/verify && /tmp/verify/bin/pip install nvhive==0.47.0
 /tmp/verify/bin/nvh version && /tmp/verify/bin/nvh --help
 ```
 
@@ -142,7 +142,7 @@ A wrong version or an import failure means **yank** the release on PyPI
 (`Options > Yank release` — hides it from new installs, keeps it for pinned
 users) and fix forward with a patch release. Never delete or force-push a
 released tag. Users on a broken release pin the last one PyPI has
-(`pip install 'nvhive==0.42.0'` today: 0.43.0 to 0.45.0 have CHANGELOG
+(`pip install 'nvhive==0.42.0'` today: 0.43.0 to 0.47.0 have CHANGELOG
 sections but no tag or PyPI release yet, an owner item); WebUI-versus-backend
 drift is fixed by `nvh webui --clean`.
 

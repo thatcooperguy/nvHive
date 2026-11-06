@@ -1,6 +1,6 @@
 """NVHive — Multi-LLM Orchestration Platform."""
 
-__version__ = "0.46.0"
+__version__ = "0.47.0"
 
 import os as _os
 
