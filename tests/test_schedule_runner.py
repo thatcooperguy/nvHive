@@ -361,9 +361,12 @@ async def test_the_twenty_first_run_prunes_the_oldest_pair(monkeypatch) -> None:
     root = jobs.jobs_root()
     mine = jobs.list_jobs(kind=runner.SCHEDULE_RUN_KIND, schedule_id=task.id, limit=100)
     assert len(mine) == runner.SCHEDULE_RUN_HISTORY == 20
-    oldest = sorted(ids)[0]
+    # Job ids are second-resolution plus random hex and the prune orders by id,
+    # so when the protected (twenty-first) run shares a second with the others
+    # and its hex sorts lowest, the oldest *unprotected* id is the one pruned.
+    oldest = sorted(ids[:-1])[0]
     assert not (root / f"{oldest}.json").exists() and not (root / f"{oldest}.jsonl").exists()
-    assert {j["id"] for j in mine} == set(sorted(ids)[1:])
+    assert {j["id"] for j in mine} == set(ids) - {oldest}
     assert (root / f"{other_job['id']}.json").exists(), "another schedule's runs are untouched"
     assert Scheduler().get(task.id).run_count == 21
 

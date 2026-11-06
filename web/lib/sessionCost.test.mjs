@@ -343,3 +343,29 @@ test('formatHourlyRate: the settings page value', () => {
   // A string the client cannot parse is shown as the server sent it.
   assert.equal(formatHourlyRate('two'), 'two / hour');
 });
+
+test('server `pairs` separates an idle tab from a tab whose only call failed locally', () => {
+  const platform = { device_class: 'workstation', device_label: 'Workstation', is_cloud: false, cloud_provider: null, is_owned: true };
+  const status = (session) => ({
+    daily_spend: '0', daily_limit: '0', monthly_spend: '0', monthly_limit: '0', daily_queries: 0, monthly_queries: 0, by_provider: {},
+    hourly_rate_usd: null, platform,
+    session: { since: 1_700_000_000_000, spend_usd: '0', cost_known: true, local_only: true, by_provider: {}, unavailable: false, ...session },
+  });
+  // Idle tab: nothing counted — the plain age (cloud $0.0000), never "local only".
+  const idle = status({ pairs: 0, cost_known: null });
+  assert.equal(sessionCostInput(idle, 4_000).localOnly, false);
+  assert.equal(sessionCostFromStatus(idle, 4_000).text, 'Session 0m 04s · cloud $0.0000');
+  // A null cost_known with nothing counted is not an unpriced floor.
+  assert.equal(sessionCostInput(idle, 4_000).cloudKnown, true);
+  // One failed local pair: by_provider (successes) is empty, pairs is 1 — local only.
+  const failedLocal = status({ pairs: 1 });
+  assert.equal(sessionCostInput(failedLocal, 4_000).localOnly, true);
+  assert.equal(sessionCostFromStatus(failedLocal, 4_000).text, 'Session 0m 04s · local only');
+  // pairs wins over a by_provider group: a counted pair with local_only false stays cloud.
+  assert.equal(sessionCostInput(status({ pairs: 2, local_only: false }), 4_000).localOnly, false);
+  // pairs 0 beats a stray by_provider group.
+  assert.equal(sessionCostInput(status({ pairs: 0, by_provider: { ollama: '0' } }), 4_000).localOnly, false);
+  // Absent pairs (an older API): the by_provider inference, as before.
+  assert.equal(sessionCostInput(status({}), 4_000).localOnly, false);
+  assert.equal(sessionCostInput(status({ by_provider: { ollama: '0' } }), 4_000).localOnly, true);
+});

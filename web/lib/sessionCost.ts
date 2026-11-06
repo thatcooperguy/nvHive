@@ -33,7 +33,7 @@
  * both modules to pin the shared literal.
  */
 
-import type { BudgetStatus } from './types';
+import type { BudgetSession, BudgetStatus } from './types';
 
 /** sessionStorage key for the tab's start (epoch ms); the same anchor the
  * pre-0.46 SessionAgePill used, so a tab open across the upgrade keeps its age. */
@@ -203,9 +203,13 @@ export function sessionCost(input: SessionCostInput): SessionCostPill {
   return { text: parts.join(' · '), title: titles.join(' '), state };
 }
 
-/** Did the ledger count at least one (model, provider) pair since the cut? */
-function hasCountedPairs(byProvider: Record<string, string> | null | undefined): boolean {
-  return Boolean(byProvider) && Object.keys(byProvider as Record<string, string>).length > 0;
+/** Did the ledger count at least one pair since the cut? The server's `pairs`
+ * (every row, failed ones included) when present; an older API without it
+ * falls back to "some provider has a successful-row group". */
+function hasCountedPairs(session: BudgetSession): boolean {
+  if (typeof session.pairs === 'number') return session.pairs > 0;
+  const byProvider = session.by_provider;
+  return Boolean(byProvider) && Object.keys(byProvider).length > 0;
 }
 
 /**
@@ -223,9 +227,9 @@ export function sessionCostInput(status: BudgetStatus | null | undefined, ageMs:
     cloudSinceTab: session ? (sessionCostNumber(session.spend_usd) ?? 0) : null,
     cloudKnown: session ? session.cost_known !== false : true,
     // The server's verdict is vacuously true when no pair was counted
-    // (`_pairs_local_only([])`): a tab in which nothing has run yet is not
-    // "local only" — it has no cloud spend, which `cloud $0.0000` says.
-    localOnly: session ? session.local_only === true && hasCountedPairs(session.by_provider) : false,
+    // (`_pairs_local_only([])`): an idle tab (`pairs` 0) is not "local only";
+    // a tab whose only pair failed locally (`pairs` 1, no by_provider group) is.
+    localOnly: session ? session.local_only === true && hasCountedPairs(session) : false,
     isOwned: platform ? platform.is_owned === true : null,
     isCloud: platform ? platform.is_cloud === true : null,
     deviceClass: platform ? platform.device_class || 'unknown' : null,

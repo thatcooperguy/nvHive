@@ -200,11 +200,14 @@ export interface BudgetSession {
   spend_usd: string;
   /** False = at least one (model, provider) pair since `since` has no
    * catalog price, so `spend_usd` is a floor (render it as `≥`). */
-  cost_known: boolean;
+  cost_known: boolean | null;
   /** True only when EVERY pair since `since` is a local provider — a catalog
    * verdict, never inferred from a zero sum. */
   local_only: boolean;
   by_provider: Record<string, string>;
+  /** Request/response pairs counted since `since` (every ledger row, failed
+   * ones included). Absent on an older API. */
+  pairs?: number;
   /** The ledger could not be read: the figures above are the zero fallback. */
   unavailable: boolean;
 }

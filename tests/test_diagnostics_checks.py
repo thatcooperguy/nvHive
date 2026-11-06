@@ -57,7 +57,7 @@ def test_every_row_id_belongs_to_a_registered_check():
 
 def test_smoke_tier_is_the_api_checks_and_report_includes_them():
     smoke = {c.id for c in diag.checks_for(diag.SMOKE)}
-    assert smoke == {"api_health", "api_advisors", "api_proxy_health", "api_quota", "api_query", "api_proxy_chat"}
+    assert smoke == {"api_health", "api_advisors", "api_proxy_health", "api_quota", "api_query", "api_proxy_chat", "wizard_first_answer"}
     assert smoke <= {c.id for c in diag.checks_for(diag.REPORT)}
     assert diag.SMOKE in diag.TIERS
 
@@ -294,10 +294,10 @@ def test_sandbox_row_when_isolation_required_but_docker_missing(monkeypatch):
 def test_api_checks_skip_cleanly_when_nothing_listens():
     ctx = _ctx()  # port 1: connection refused
     rows = asyncio.run(diag.run_checks(diag.SMOKE, ctx))
-    assert len(rows) == 6 and {r.status for r in rows} == {"skip"}
+    assert len(rows) == 7 and {r.status for r in rows} == {"skip"}
     assert all("no API listening at http://127.0.0.1:1" == r.detail for r in rows)
     summary = diag.summarize(rows)
-    assert (summary["skipped"], summary["failed"], summary["fixes"]) == (6, 0, [])
+    assert (summary["skipped"], summary["failed"], summary["fixes"]) == (7, 0, [])
 
 
 def test_api_url_comes_from_env(monkeypatch):
@@ -350,6 +350,44 @@ def test_api_auth_failure_is_a_fail_with_a_fix(monkeypatch):
     with patch("httpx.AsyncClient", _fake_async_client(401, {"detail": "nope"}, [])):
         row = asyncio.run(_rows("api_proxy_chat", ctx))[0]
     assert row.status == "fail" and "HTTP 401" in row.detail and "HIVE_API_KEY" in row.fix
+
+
+def _wizard_row(status_code, payload, reachable=True):
+    ctx = _ctx(_api=diag.ApiProbe("http://127.0.0.1:8000", reachable=reachable, health={"status": "ok"}))
+    calls = []
+    with patch("httpx.AsyncClient", _fake_async_client(status_code, payload, calls)):
+        row = asyncio.run(_rows("wizard_first_answer", ctx))[0]
+    return row, calls
+
+
+def test_wizard_first_answer_passes_on_a_non_empty_answer():
+    row, calls = _wizard_row(200, {"status": "success", "data": {"answer": "Hi there!", "mode": "llm"}})
+    assert row.status == "pass"
+    method, url, body, _ = calls[0]
+    assert (method, url, body) == ("POST", "http://127.0.0.1:8000/v1/wizard/chat", {"question": "hello"})
+
+
+def test_wizard_first_answer_passes_on_the_deliberate_refusal():
+    data = {"answer": "", "mode": "deterministic", "fallback_reason": "profile_local_only_provider_unavailable"}
+    row, _ = _wizard_row(200, {"status": "success", "data": data})
+    assert row.status == "pass"
+
+
+def test_wizard_first_answer_fails_on_a_500_and_names_the_next_step():
+    row, _ = _wizard_row(500, {"detail": "boom"})
+    assert row.status == "fail" and "HTTP 500" in row.detail
+    assert "nvh services restart" in row.fix and "nvh status --deep" in row.fix
+
+
+def test_wizard_first_answer_fails_on_an_empty_body():
+    row, _ = _wizard_row(200, {"status": "success", "data": {"answer": "  ", "mode": "llm"}})
+    assert row.status == "fail" and "returned nothing" in row.detail
+    assert "nvh services restart" in row.fix
+
+
+def test_wizard_first_answer_skips_when_nothing_listens():
+    row, calls = _wizard_row(200, {}, reachable=False)
+    assert row.status == "skip" and not calls
 
 
 # ---------------------------------------------------------------------------

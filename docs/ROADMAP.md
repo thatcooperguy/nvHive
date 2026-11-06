@@ -132,14 +132,15 @@ engine or CLI, not yet surfaced in the WebUI) · **open** (wanted, unscheduled)
   runners only. Closed in 0.47: `Scheduler._save` holds `<store>.lock`
   across the read-modify-write and keeps any record another process saved
   meanwhile.
-  The session block's `local_only` and `cost_known` are vacuously true for
-  an idle tab (no model answered since `since`) — since Wave C the pill
-  treats an empty `by_provider` as nothing counted and reads
-  `cloud $0.0000`, but a tab whose only call was a failed local one reads
-  the same, so a pair count on the session block is the exact fix — and a
-  `convene` run's
-  `cost_known` is `None` at `$0` because the council response carries no
-  per-member catalog verdict. `_spend_by_provider_since` lives in
+  The session block's `local_only` and `cost_known` were vacuously true for
+  an idle tab (no model answered since `since`). Closed in 0.47: the block
+  carries `pairs` (every request/response row in the window, failed ones
+  included) and `cost_known` is `null` when nothing was counted; the pill
+  reads `local only` only when `pairs` is above zero, so an idle tab shows
+  the plain age and a tab whose only call was a failed local one reads
+  `local only`. A `convene` run's per-member catalog verdict is still
+  missing (its total is `$0` with `cost_known` from the window, not from
+  the council). `_spend_by_provider_since` lives in
   `nvh/api/server.py` rather than the repository (a behaviour-neutral
   move), and the avatar route probes ComfyUI twice per request when it is
   installed but down. The MASCOT.md rows for the question card and for

@@ -1014,6 +1014,31 @@ class TestBudgetStatusSession:
         assert {k: Decimal(v) for k, v in session["by_provider"].items()} == {"openai": Decimal("0.10"), "groq": Decimal("0.02")}
         assert session["cost_known"] is True and session["local_only"] is False and session["unavailable"] is False
 
+    def test_pairs_counts_every_row_in_the_window_and_is_zero_when_empty(self, test_client: TestClient) -> None:
+        import nvh.storage.repository as repo
+
+        since = _since_ms(hours_ago=1)
+        empty = test_client.get("/v1/budget/status", params={"since": since}).json()["data"]["session"]
+        assert empty["pairs"] == 0 and empty["cost_known"] is None and empty["by_provider"] == {}
+
+        async def seed() -> None:
+            old = await repo.log_query(mode="simple", provider="openai", model="gpt-x", cost_usd=Decimal("0.50"))
+            await _backdate(old.id, hours=3)
+            await repo.log_query(mode="proxy", provider="ollama", model="llama3.2", cost_usd=Decimal("0"), status="error")
+
+        _seed(seed)
+        one = test_client.get("/v1/budget/status", params={"since": since}).json()["data"]["session"]
+        # The 3h-old row is out; the failed local row is the one pair, so by_provider (successes) stays empty.
+        assert one["pairs"] == 1 and one["by_provider"] == {} and one["local_only"] is True and one["cost_known"] is True
+
+        async def seed_more() -> None:
+            await repo.log_query(mode="proxy", provider="openai", model="gpt-x", cost_usd=Decimal("0.10"))
+            await repo.log_query(mode="proxy", provider="openai", model="gpt-x", cost_usd=Decimal("0.10"), status="error")
+
+        _seed(seed_more)
+        three = test_client.get("/v1/budget/status", params={"since": since}).json()["data"]["session"]
+        assert three["pairs"] == 3
+
     def test_cost_known_is_false_when_one_pair_is_unpriced_even_a_failed_call(self, test_client: TestClient) -> None:
         import nvh.storage.repository as repo
 

@@ -240,6 +240,8 @@ nvh ask "hello" --local                # local path
 nvh convene "hello" --cabinet engineering
 ```
 
+The SMOKE tier (`nvh status --smoke`, `nvh test`) also runs `wizard_first_answer`: it posts one word to `/v1/wizard/chat` and passes on a non-empty answer or on the Wizard's plain local-model refusal, fails on a 5xx or an empty reply, and skips when no server is listening.
+
 Then the target-VM checklist in [MAINTAINERS.md](MAINTAINERS.md#production-readiness).
 
 ## Local quirks

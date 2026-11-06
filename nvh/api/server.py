@@ -3861,6 +3861,26 @@ async def _spend_by_provider_since(since: datetime) -> dict[str, Decimal]:
     return {str(row[0] or ""): Decimal(str(row[1])) for row in rows}
 
 
+async def _pairs_counted_since(since: datetime) -> int:
+    """How many request/response pairs the window covers: ``COUNT(QueryLog.id)`` at or after ``since``.
+
+    Every row, whatever its ``status`` (a failed local call is a pair too), so
+    an idle tab reads 0 while a tab whose only call failed reads 1.
+    """
+    from sqlalchemy import func as _fn
+    from sqlalchemy import select as _sel
+
+    from nvh.storage.models import QueryLog
+    from nvh.storage.repository import get_session
+
+    start = since if since.tzinfo is not None else since.replace(tzinfo=UTC)
+    async with get_session() as session:
+        count = (await session.execute(
+            _sel(_fn.count(QueryLog.id)).where(QueryLog.created_at >= start)
+        )).scalar_one()
+    return int(count or 0)
+
+
 #: The smallest ``since`` accepted as epoch milliseconds: 10^12 ms is 2001-09-09T01:46:40Z. Anything
 #: below it is almost surely epoch *seconds* (1.7 × 10^9 today) and would read as a 1970 instant.
 _SINCE_FLOOR_MS = 10**12
@@ -3874,6 +3894,8 @@ async def _session_spend(since_ms: int) -> dict[str, Any]:
     ``cost_known`` and ``local_only`` are catalog verdicts over every
     ``(model, provider)`` pair that answered since ``since`` (any status: a
     cloud call that failed still happened); ``spend_usd`` sums successful rows.
+    ``pairs`` counts every ``QueryLog`` row in the window (any status) and
+    ``cost_known`` is ``None`` when it is 0.
     """
     from nvh.storage import repository as repo
 
@@ -3893,6 +3915,7 @@ async def _session_spend(since_ms: int) -> dict[str, Any]:
         spend = await repo.get_spend_since(since)
         pairs = await repo.distinct_models_since(since)
         by_provider = await _spend_by_provider_since(since)
+        pair_count = await _pairs_counted_since(since)
     except Exception as exc:
         logger.warning("Session spend unavailable; returning local fallback: %s", exc)
         return {
@@ -3901,14 +3924,17 @@ async def _session_spend(since_ms: int) -> dict[str, Any]:
             "cost_known": False,
             "local_only": False,
             "by_provider": {},
+            "pairs": 0,
             "unavailable": True,
         }
     return {
         "since": since_ms,
         "spend_usd": str(spend),
-        "cost_known": _pairs_cost_known(pairs),
+        # ``null`` when nothing was counted: a $0 nobody spent is unknown, not priced.
+        "cost_known": _pairs_cost_known(pairs) if pair_count > 0 else None,
         "local_only": _pairs_local_only(pairs),
         "by_provider": {name: str(value) for name, value in by_provider.items()},
+        "pairs": pair_count,
         "unavailable": False,
     }
 
@@ -3950,7 +3976,7 @@ async def budget_status(
     - ``daily_cost_known``: the catalog's verdict on every ``(model, provider)``
       pair that answered today (the same UTC-day cut as ``daily_spend``).
     - ``session`` (only with ``since``): ``{since, spend_usd, cost_known,
-      local_only, by_provider, unavailable}`` — see :func:`_session_spend`;
+      local_only, by_provider, pairs, unavailable}`` — see :func:`_session_spend`;
       ``null`` without ``since``.
     - ``platform``: ``{device_class, device_label, is_cloud, cloud_provider,
       is_owned}`` from the warmed platform facts — cheap, unlike

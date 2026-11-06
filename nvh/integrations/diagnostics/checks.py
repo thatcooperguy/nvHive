@@ -1396,6 +1396,46 @@ async def _api_proxy_chat(ctx: CheckContext) -> CheckResult:
     )
 
 
+_WIZARD_REFUSAL_REASON = "profile_local_only_provider_unavailable"
+_WIZARD_FIRST_ANSWER_FIX = "Run `nvh services restart` and `nvh status --deep`"
+
+
+@check("wizard_first_answer", "Wizard first answer (POST /v1/wizard/chat)", SMOKE, REPORT)
+async def _wizard_first_answer(ctx: CheckContext) -> CheckResult:
+    """The first-run path: ``hello`` to the Wizard gets an answer or a plain refusal.
+
+    Passes on a 200 with a non-empty ``answer``, or on the deliberate local-only
+    refusal (both prove the path works); fails on a 5xx, a transport error after
+    ``/v1/health`` answered, or an empty body; skips when nothing listens.
+    """
+    payload, row = await _api_request(ctx, "POST", "/v1/wizard/chat", {"question": "hello"})
+    if row is not None:
+        if row.status == "fail":
+            row.fix = row.fix or _WIZARD_FIRST_ANSWER_FIX
+            row.detail = f"the Wizard did not answer ({row.detail})"
+        return row
+    payload = payload if isinstance(payload, dict) else {}
+    answer = payload.get("answer")
+    answer = answer.strip() if isinstance(answer, str) else ""
+    if payload.get("fallback_reason") == _WIZARD_REFUSAL_REASON:
+        return CheckResult(
+            status="pass",
+            detail="the Wizard declined plainly (local model not running) — the path works",
+            data={"fallback_reason": _WIZARD_REFUSAL_REASON},
+        )
+    if not answer:
+        return CheckResult(
+            status="fail",
+            detail="the Wizard returned nothing",
+            fix=_WIZARD_FIRST_ANSWER_FIX,
+        )
+    return CheckResult(
+        status="pass",
+        detail=f"answered ({len(answer)} characters, mode {payload.get('mode', '?')})",
+        data={"mode": payload.get("mode")},
+    )
+
+
 __all__ = [
     "DEEP",
     "GLANCE",

@@ -3,6 +3,19 @@
 ## [Unreleased]
 
 ### Added
+- **A "first answer" smoke check.** `nvh test` / `nvh status --smoke` gain
+  `wizard_first_answer`: it posts a one-word question to `POST /v1/wizard/chat`
+  with no profile and passes on a non-empty answer or on the deliberate
+  local-only refusal (both mean the path works), fails on an HTTP error, a
+  transport error or an empty body with "run `nvh services restart` and
+  `nvh status --deep`" as the next step, and skips when nothing listens.
+- **The session cost block counts its pairs.** `GET /v1/budget/status?since=`
+  returns `pairs` (every request/response row in the window, failed ones
+  included) and `cost_known` is `null` when nothing was counted, so the
+  pill reads `local only` only when something ran locally: an idle tab shows
+  the plain age and a tab whose only call was a failed local one reads
+  `local only` instead of `cloud $0.0000`. An older API without `pairs`
+  keeps the previous inference from `by_provider`.
 - **The chat's empty state is a guided first run.** Three lines derived
   from the machine, not typed: your local model (ready, pulling with its
   size, or — without a GPU — the free cloud tier with a pointer to add a

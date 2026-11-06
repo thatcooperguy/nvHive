@@ -258,7 +258,10 @@ instant (CLI, other tabs, proxy clients and scheduled runs all count),
 `cost_known` is false when any model that answered since then — failed calls
 included — has no catalog price, and `local_only` is true only when every
 provider that answered was local by the catalog's verdict, never because the
-sum is zero (an unpriced cloud model logs $0 too). Without `since` the block is
+sum is zero (an unpriced cloud model logs $0 too). `pairs` counts every
+ledger row in the window, failed calls included (0 for an idle tab, so an idle
+tab and a tab whose only call failed locally read differently), and
+`cost_known` is `null` when `pairs` is 0. Without `since` the block is
 `null`; a `since` that is not epoch milliseconds is a 422 — negative,
 non-integer, overflowing, or too small to be milliseconds (below 10^12, which
 is 2001-09-09: a value in epoch *seconds* would otherwise read as a 1970
