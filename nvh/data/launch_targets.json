@@ -6,16 +6,19 @@
       "name": "claude",
       "display_name": "Claude Code",
       "kind": "mcp",
-      "command": ["claude"],
+      "command": [
+        "claude"
+      ],
       "register": "claude_code",
       "env": {},
       "snippet": "# nvh launch claude\n#   1. claude mcp add nvhive -- nvhive-mcp    (registers nvHive's MCP server; repeatable)\n#   2. claude <extra args>                     (inference stays with Anthropic)\n# No inference variables are set: nvHive's Anthropic proxy does not pass tool_use\n# through, so pointing Claude Code's inference at it would break its tools.\n# `nvh launch claude --inference-proxy` prints that snippet anyway, marked unverified.",
       "inference_proxy": "# Claude Code inference through nvHive's Anthropic proxy.\n# nvHive's Anthropic proxy does not pass tool_use through, so Claude Code's\n# tools would stop working; `nvh launch claude` keeps inference at Anthropic\n# and registers nvHive as an MCP server instead.\nANTHROPIC_BASE_URL={base}/anthropic\nANTHROPIC_AUTH_TOKEN={key}",
       "docs_url": "https://code.claude.com/docs/en/mcp",
-      "verified_on": null,
+      "verified_on": "2026-11-05",
       "notes": [
         "Registers nvHive as an MCP server (the same `claude mcp add nvhive -- nvhive-mcp` that `nvh integrate` runs) and launches `claude`; inference stays with Anthropic.",
-        "nvHive's Anthropic-compatible proxy drops tool_use, which Claude Code needs, so no ANTHROPIC_* variable is set; --inference-proxy prints that snippet marked unverified."
+        "nvHive's Anthropic-compatible proxy drops tool_use, which Claude Code needs, so no ANTHROPIC_* variable is set; --inference-proxy prints that snippet marked unverified.",
+        "Verified 2026-11-05 against Claude Code 2.1.257: `claude mcp add nvhive -- nvhive-mcp` registers the server (it lists as pending approval until you open claude once); the launch runs your own `claude`."
       ]
     },
     {
@@ -28,7 +31,8 @@
       "verified_on": null,
       "notes": [
         "Codex's default provider speaks the Responses API, which nvHive does not serve: the stanza sets wire_api = \"chat\" so Codex uses /chat/completions.",
-        "env_key names the variable Codex reads the key from; nvHive never writes ~/.codex/config.toml for you."
+        "env_key names the variable Codex reads the key from; nvHive never writes ~/.codex/config.toml for you.",
+        "Checked 2026-11-05 against Codex CLI 0.152.1: it refuses `wire_api = \"chat\"` (\"no longer supported\"; see github.com/openai/codex/discussions/7782) and speaks only the Responses API, which nvHive does not serve yet — this snippet does not load on current Codex. A `/v1/responses` endpoint is the follow-up; until then point Codex at a provider that serves it."
       ]
     },
     {

@@ -37,8 +37,9 @@ and a **Settings** group holding the six operator pages above (it opens itself
 while one of them is active). Every route is unchanged, and the command palette
 (`Ctrl+K`) lists each page under its new name and, for one release, its old
 one. The `/query` and `/council` pages were removed in 0.42; their features are
-the chat page's single and council modes, and their redirects retire with the
-`/wizard` redirect that follows the shell merge.
+the chat page's single and council modes. `/wizard` is now a redirect too (it
+carries `?conversation=` to `?c=`), and all three redirects retire in 0.48
+(owner decision O14).
 
 ## Chat history
 

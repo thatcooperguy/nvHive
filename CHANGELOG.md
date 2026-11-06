@@ -3,6 +3,21 @@
 ## [Unreleased]
 
 ### Added
+- **The chat home follows a new Wizard thread and switches modes on a
+  phone.** When the Wizard creates its conversation on the first message the
+  sidebar highlights it at once (the page reads the `?c=` the thread wrote
+  when the conversation list changes), and below the `sm` breakpoint the
+  Wizard · Ask · Convene · Poll switch is a select beside the menu button.
+  WEBUI.md says `/wizard` is a redirect too and that the three redirects
+  retire in 0.48 (O14).
+- **`nvh launch claude` is verified; the Codex snippet is known not to load
+  on current Codex.** Against Claude Code 2.1.257 the registration command
+  nvHive runs (`claude mcp add nvhive -- nvhive-mcp`) is accepted and the
+  server lists (pending approval until you open `claude` once), so the
+  `claude` row carries `verified_on: 2026-11-05`. Codex CLI 0.152.1 refuses
+  `wire_api = "chat"` ("no longer supported") and speaks only the Responses
+  API, which nvHive does not serve; the `codex` row says so in its notes and
+  stays unverified, and a `/v1/responses` endpoint is the follow-up.
 - **One chat home.** `/` hosts the Wizard as its default mode, with Ask
   (one model), Convene (council) and Poll (compare) as the other modes of
   the same page, switched in the top bar; a wizard thread opened from the

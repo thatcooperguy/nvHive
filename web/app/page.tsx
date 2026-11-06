@@ -363,9 +363,17 @@ export default function ChatPage() {
 
   useEffect(() => {
     refreshConversations();
-    window.addEventListener(CONVERSATIONS_CHANGED_EVENT, refreshConversations);
-    return () => window.removeEventListener(CONVERSATIONS_CHANGED_EVENT, refreshConversations);
-  }, [refreshConversations]);
+    const onConversationsChanged = () => {
+      refreshConversations();
+      // A new wizard thread writes its id to ?c=; follow it in the sidebar.
+      if (mode === 'wizard') {
+        const id = new URLSearchParams(window.location.search).get('c');
+        if (id) setActiveConvId(id);
+      }
+    };
+    window.addEventListener(CONVERSATIONS_CHANGED_EVENT, onConversationsChanged);
+    return () => window.removeEventListener(CONVERSATIONS_CHANGED_EVENT, onConversationsChanged);
+  }, [refreshConversations, mode]);
 
   // Load models once on mount. Provider health is handled separately
   // by useProviderHealth (polled every 30s).
@@ -1135,6 +1143,18 @@ export default function ChatPage() {
               {activeTitle ?? 'NVIDIA AI Workspace'}
             </span>
           </div>
+          <select
+            value={mode}
+            onChange={e => handleModeChange(e.target.value as ChatMode)}
+            aria-label="Chat mode"
+            className="sm:hidden rounded-md border border-[#e5e5e5] bg-[#fafafa] px-1.5 py-0.5 text-[10px] font-mono text-[#0a0a0a] dark:border-[#262626] dark:bg-[#141414] dark:text-[#fafafa]"
+          >
+            {MODE_TABS.map(tab => (
+              <option key={tab.mode} value={tab.mode}>
+                {tab.label}
+              </option>
+            ))}
+          </select>
           {/* Mode switch (0.47 S2): Wizard is the default; Ask, Convene and
               Poll are the other modes of this one home. */}
           <div

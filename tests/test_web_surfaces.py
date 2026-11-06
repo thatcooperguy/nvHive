@@ -503,3 +503,14 @@ def test_configuration_and_models_docs_name_the_voice_extra() -> None:
     models = _doc("MODELS.md")
     assert "`nvhive[voice]`" in models
     assert "no local TTS pack" in models
+
+
+def test_chat_home_follows_new_wizard_thread_and_has_narrow_mode_switch() -> None:
+    page = _read("app/page.tsx")
+    handler = _block(page, "const onConversationsChanged = () => {", "window.addEventListener(")
+    assert "refreshConversations()" in handler
+    assert "get('c')" in handler and "setActiveConvId(id)" in handler
+    assert "CONVERSATIONS_CHANGED_EVENT, onConversationsChanged" in page
+    assert page.count("MODE_TABS.map(") >= 2
+    assert page.count('aria-label="Chat mode"') == 2
+    assert "sm:hidden rounded-md" in page
