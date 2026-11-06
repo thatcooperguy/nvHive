@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Changed
+- **One header and plain-word states.** Every page under the shell uses the
+  shared page header (Setup gained it; its section titles stay), and the
+  empty, loading and error states of Memory, Schedules, Agents and Models
+  each end with the one next step in plain words — "Save a note from the
+  chat with /save, or add one above", "Create one below — ask or convene,
+  every 30m, 1h or 1d", "Press + Create your first agent to add one",
+  "Start the API from the console at the top, then reload" — with no reason
+  codes and no pointer to logs. The Schedules page no longer names the CLI
+  twin in its empty state.
+
 ### Added
 - **A "first answer" smoke check.** `nvh test` / `nvh status --smoke` gain
   `wizard_first_answer`: it posts a one-word question to `POST /v1/wizard/chat`

@@ -189,7 +189,7 @@ export default function AgentsPage() {
   const customCount = profiles.length - builtInCount;
 
   const subtitle = loading
-    ? 'Loading agent catalog…'
+    ? 'Loading agent catalog… your agents appear here in a moment.'
     : profiles.length === 0
       ? 'No agents available yet — create your first one.'
       : `${profiles.length} agent${profiles.length === 1 ? '' : 's'} (${builtInCount} built-in${customCount ? `, ${customCount} custom` : ''})`;
@@ -223,6 +223,7 @@ export default function AgentsPage() {
           >
             <div className="font-bold uppercase tracking-wider">Could not load agents</div>
             <div className="mt-1 text-[10px] text-[#525252] dark:text-[#a3a3a3]">{error}</div>
+            <div className="mt-1 text-[10px] text-[#525252] dark:text-[#a3a3a3]">Start the API from the console at the top, then press Retry.</div>
             <button
               type="button"
               onClick={() => setReloadKey(k => k + 1)}
@@ -246,7 +247,7 @@ export default function AgentsPage() {
               No agents available
             </div>
             <div className="mx-auto mt-2 max-w-md text-[11px] font-mono text-[#a3a3a3] dark:text-[#737373]">
-              The catalog came back empty. The Hive API normally ships with at least the default Wizard persona — check that the API is online.
+              The catalog came back empty. Press + Create your first agent to add one.
             </div>
             <button
               type="button"

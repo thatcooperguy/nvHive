@@ -595,21 +595,21 @@ function VaultPageBody() {
 
         {notesLoading && notes.length === 0 ? (
           <div className="border border-dashed border-[#e5e5e5] p-6 text-center text-sm text-[#737373] dark:border-[#262626] dark:text-[#a3a3a3]">
-            Loading notes
+            Loading notes… they appear here in a moment, then pick one to open.
           </div>
         ) : notes.length === 0 ? (
           <div className="border border-dashed border-[#e5e5e5] p-6 text-center text-sm text-[#737373] dark:border-[#262626] dark:text-[#a3a3a3]">
             {notesError
-              ? 'The note list could not be loaded.'
+              ? 'The note list could not be loaded. Start the API from the console at the top, then press Reload notes.'
               : status?.initialized
-                ? 'No notes yet. Save one above, or ask the Wizard to remember something.'
-                : 'No notes yet. Initialize the vault, then save a memory above or ask the Wizard to remember something.'}
+                ? 'No notes yet. Save a note from the chat with /save, or add one above.'
+                : 'No notes yet. Press Initialize Vault at the top, then save a note from the chat with /save.'}
           </div>
         ) : visibleNotes.length === 0 ? (
           <div className="border border-dashed border-[#e5e5e5] p-6 text-center text-sm text-[#737373] dark:border-[#262626] dark:text-[#a3a3a3]">
             {memoryOnly && !filterCategory && !filterTag && !query.trim()
               ? 'No memory records yet. Only seeded documentation is in the vault; turn Memory off to see it.'
-              : 'No notes match these filters.'}
+              : 'No notes match these filters. Clear the search or filters to see every note.'}
           </div>
         ) : (
           <ul className="divide-y divide-[#e5e5e5] border border-[#e5e5e5] dark:divide-[#262626] dark:border-[#262626]">
@@ -684,10 +684,10 @@ function VaultPageBody() {
                   {open && (
                     <div className="mt-3 border-t border-[#e5e5e5] pt-3 dark:border-[#262626]">
                       {open.state === 'loading' && (
-                        <div className="text-xs text-[#737373] dark:text-[#a3a3a3]">Loading the note</div>
+                        <div className="text-xs text-[#737373] dark:text-[#a3a3a3]">Loading the note… it opens here in a moment.</div>
                       )}
                       {open.state === 'error' && (
-                        <div className="text-xs text-red-700 dark:text-red-300">{open.error}</div>
+                        <div className="text-xs text-red-700 dark:text-red-300">{open.error} Close the note and open it again.</div>
                       )}
                       {open.state === 'ok' && (
                         <>

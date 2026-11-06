@@ -278,7 +278,7 @@ function RunDrawer({
         </div>
         {!runs || runs.length === 0 ? (
           <div className="mt-2 font-mono text-xs text-[#a3a3a3] dark:text-[#737373]">
-            {loading ? 'Loading runs…' : 'No runs recorded yet.'}
+            {loading ? 'Loading runs… they appear here in a moment.' : 'No runs recorded yet. Press Run now on the schedule to make the first one.'}
           </div>
         ) : (
           <ul className={`${PANEL_CLASS} mt-2 divide-y divide-[#e5e5e5] dark:divide-[#262626]`}>
@@ -541,7 +541,7 @@ export default function SchedulesPage() {
         }
       />
       <div className="p-6 space-y-6 max-w-6xl mx-auto">
-        {loadError && <InlineNotice text={`Could not load schedules: ${loadError}`} tone="red" />}
+        {loadError && <InlineNotice text={`Could not load schedules: ${loadError}. Start the API from the console at the top, then press Reload.`} tone="red" />}
 
         <section className={`${PANEL_CLASS} p-4`}>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -592,12 +592,11 @@ export default function SchedulesPage() {
           {schedules.length === 0 ? (
             <div className="px-4 py-10 text-center">
               <div className="font-mono text-sm text-[#525252] dark:text-[#a3a3a3]">
-                {loading ? 'Loading schedules…' : 'No schedules yet.'}
+                {loading ? 'Loading schedules… your list appears here in a moment.' : 'No schedules yet.'}
               </div>
               {!loading && (
                 <p className="mt-1 text-xs text-[#737373] dark:text-[#a3a3a3]">
-                  Add one below: a prompt, how often, and which agent runs it. The CLI twin is{' '}
-                  <code className="font-mono">nvh schedule add</code>.
+                  Create one below — ask or convene, every 30m, 1h or 1d.
                 </p>
               )}
             </div>

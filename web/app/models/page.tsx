@@ -121,7 +121,7 @@ export default function ModelsPage() {
   );
 
   const subtitle = loading
-    ? 'Loading catalog…'
+    ? 'Loading catalog… the models appear here in a moment.'
     : `Detected GPU: ${vram ? `${vram} GB VRAM` : 'unknown'}${freeGb != null ? ` · ${freeGb.toFixed(0)} GB free disk` : ''}`;
 
   return (
@@ -150,7 +150,7 @@ export default function ModelsPage() {
 
         {error && (
           <div className="rounded border border-[#dc2626] bg-[rgba(220,38,38,0.08)] px-3 py-2 text-xs font-mono text-[#dc2626]">
-            {error}
+            {error} Start the API from the console at the top, then reload.
           </div>
         )}
 

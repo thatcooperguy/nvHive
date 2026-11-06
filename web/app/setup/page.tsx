@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
+import PageHeader from '@/components/PageHeader';
 import { useRouter } from 'next/navigation';
 import { HardwareWidgetHero } from '@/components/HardwareWidget';
 import UnifiedMemoryTag, { GpuBlockedSummary, MemoryUnreadableTag, describeUnreadableGpus, gpuStatusOf, isGpuReady, isMemoryUnreadable, isUnifiedMemoryPool, primaryGpu } from '@/components/UnifiedMemoryTag';
@@ -3052,9 +3053,12 @@ export default function SetupPage() {
       <HardwareWidgetHero />
 
       {/* Header */}
-      <div className="border-b border-[#e5e5e5] pb-2 dark:border-[#262626]">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase">nvHive Setup</div>
+      <div>
+        <PageHeader
+          eyebrow="nvHive Setup"
+          title="Setup"
+          subtitle="Check this machine, pick a model and connect a provider."
+          trailing={
           <div className="flex items-center gap-2">
             <Link href="/" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
               Ask AI
@@ -3070,7 +3074,8 @@ export default function SetupPage() {
               {advancedSetupOpen ? 'Hide Advanced Details' : 'Show Advanced Details'}
             </button>
           </div>
-        </div>
+          }
+        />
         {advancedSetupOpen && (
           <div className="mt-3 space-y-2">
             <div className="flex items-center gap-2 overflow-x-auto pt-1">

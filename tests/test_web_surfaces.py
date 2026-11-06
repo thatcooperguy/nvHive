@@ -566,3 +566,28 @@ def test_banners_end_with_one_action() -> None:
     assert "/api/services/start-api" in _read("components/SystemConsole.tsx")
     welcome = _read("components/WelcomeBackPanel.tsx")
     assert "Open the console" in welcome
+
+
+# One header and states that name the next step (0.47 S4).
+_PAGE_HEADER_PAGES = (
+    "agents", "analytics", "integrations", "models", "providers",
+    "schedules", "settings", "system", "vault", "setup",
+)
+
+
+def test_every_page_under_the_shell_uses_the_shared_page_header() -> None:
+    for page in _PAGE_HEADER_PAGES:
+        source = _read(f"app/{page}/page.tsx")
+        assert "import PageHeader from '@/components/PageHeader'" in source.replace('"', "'"), page
+        assert "<PageHeader" in source, page
+
+
+def test_empty_and_error_states_name_the_next_step() -> None:
+    pins = {
+        "vault": "Save a note from the chat with /save, or add one above.",
+        "schedules": "Create one below — ask or convene, every 30m, 1h or 1d.",
+        "agents": "Press + Create your first agent to add one.",
+        "models": "Start the API from the console at the top, then reload.",
+    }
+    for page, sentence in pins.items():
+        assert sentence in _read(f"app/{page}/page.tsx"), page
