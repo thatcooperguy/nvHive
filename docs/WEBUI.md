@@ -77,17 +77,15 @@ rename, and a right-click menu (Pin, Rename, Export as Markdown, Delete).
 
 ## Screenshots
 
-| Chat | Integrations |
-|:-:|:-:|
-| ![Chat](screenshots/chat.png) | ![Integrations](screenshots/integrations.png) |
+Captured at 1440×900 on the merged home (0.47).
 
-| System | Advisors |
+| Chat home | Models |
 |:-:|:-:|
-| ![System](screenshots/system.png) | ![Advisors](screenshots/advisors.png) |
+| ![The chat home: Wizard mode, the first-run lines, the mode switch and the pills](screenshots/chat-home.png) | ![Models: installed models and the fit-ranked catalog](screenshots/models.png) |
 
-| Setup wizard | Model Manager |
+| Connections (the Settings group open) | |
 |:-:|:-:|
-| ![Setup](screenshots/setup.png) | ![Model Manager](screenshots/model-manager.png) |
+| ![Connections under Settings: provider cards and health](screenshots/connections.png) | |
 
 ## Developing the UI
 

@@ -25,8 +25,7 @@ On a Linux desktop session use [`start-linux.sh`](docs/GETTING_STARTED.md#deskto
 3. Ollama, the API and the WebUI each come up and pass a health check — including a real end-to-end answer — before your browser opens.
 4. You ask your first question in the chat. No key, no model choice, no setting needed.
 
-![The chat home — the Wizard, your model, and the session's cost in one line](docs/screenshots/model-manager.png)
-<!-- S4: replace with a 1440x900 capture of the chat home after the shell merge (S2); the Model Manager image is a placeholder that exists today. -->
+![The chat home — the Wizard, your local model, the session's cost and your GPU in one line](docs/screenshots/chat-home.png)
 
 ## What you get
 

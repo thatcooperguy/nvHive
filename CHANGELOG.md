@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+- **Screenshots retaken on the merged home.** Three 1440×900 captures
+  (`chat-home.png`, `models.png`, `connections.png`) replace the seven from
+  April–August that showed a sidebar and a theme that no longer exist;
+  README embeds the chat home and WEBUI.md's gallery shows all three.
+
 ### Fixed
 - **The first visit no longer stalls the API.** `POST /v1/wizard/reconnect`
   (the welcome-back panel calls it once per tab) ran its probes, file scans
