@@ -315,6 +315,55 @@ def test_save_gives_up_after_a_bounded_number_of_permission_errors(store: Path, 
 # ---------------------------------------------------------------------------
 
 
+def test_save_holds_the_store_lock_and_interleaved_writers_keep_both_records(store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """0.47 (T3.9 b): two Scheduler instances loaded before either saves — the CLI and
+    the API runner — each keep the other's record, and every save runs under the lock."""
+    events: list[str] = []
+    real = sched._file_lock
+
+    import contextlib
+
+    @contextlib.contextmanager
+    def recording(path: Path):
+        assert path == store
+        events.append("acquire")
+        with real(path):
+            assert (store.parent / "schedules.json.lock").exists()
+            yield
+        events.append("release")
+
+    monkeypatch.setattr(sched, "_file_lock", recording)
+    first = Scheduler(store)
+    second = Scheduler(store)  # both loaded the empty store
+    a = first.add("from the cli", 60)
+    b = second.add("from the api runner", 60)
+    assert events == ["acquire", "release", "acquire", "release"]
+    assert not (store.parent / "schedules.json.lock").exists()
+    saved = {r["id"] for r in _read(store)["schedules"]}
+    assert saved == {a.id, b.id}
+    assert {t.id for t in second.list_tasks()} == {a.id, b.id}
+
+
+def test_a_record_removed_here_is_not_resurrected_by_the_merge(store: Path) -> None:
+    first = Scheduler(store)
+    keep = first.add("keep", 60)
+    gone = first.add("gone", 60)
+    other = Scheduler(store)
+    assert other.remove(gone.id) is True
+    assert {r["id"] for r in _read(store)["schedules"]} == {keep.id}
+
+
+def test_a_stale_lock_file_is_broken(store: Path) -> None:
+    store.parent.mkdir(parents=True, exist_ok=True)
+    lock = store.parent / "schedules.json.lock"
+    lock.write_text("", encoding="utf-8")
+    old = time.time() - 3600
+    os.utime(lock, (old, old))
+    task = Scheduler(store).add("after a crash", 60)
+    assert {r["id"] for r in _read(store)["schedules"]} == {task.id}
+    assert not lock.exists()
+
+
 def test_new_ids_are_32_hex_and_add_keeps_its_positional_signature(store: Path) -> None:
     s = Scheduler(schedule_file=store)
     plain = s.add("ping", 60)

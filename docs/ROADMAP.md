@@ -115,22 +115,23 @@ engine or CLI, not yet surfaced in the WebUI) · **open** (wanted, unscheduled)
   the estimate: `0` input tokens, output counted from the text); the
   `scheduler` doctor row and `nvh schedule list` name a quarantined
   `schedules.json`; writers inside the API process share one lock and the
-  runner re-reads the store at every write. Still open: whether
-  `require_auth` should also read the Anthropic SDKs' `x-api-key` header
-  (`ANTHROPIC_API_KEY=<key>` is a 401 today; `ANTHROPIC_AUTH_TOKEN=<key>`
-  works) is an owner call raised after the design's fourteen decisions and
-  not numbered among them: it widens the credential surface by one header
-  spelling.
+  runner re-reads the store at every write. The `x-api-key` question (the Anthropic SDKs'
+  header, so `ANTHROPIC_API_KEY=<key>` was a 401) is closed in 0.47:
+  `require_auth` reads `x-api-key` as a second spelling of the same
+  credential.
 - **Left from Wave B** (the server-features wave, shipped in 0.46.0).
   A transcript posted to the OpenAI-compatible handler that ends in an
   assistant or tool message (an agent loop returning tool results) is
-  flattened to the pre-0.46 string rather than forwarded as history,
-  because `Engine._build_messages` would append an empty user turn; the
-  one-line engine change (`if prompt or not history`) plus the handler
-  hunk is a 0.47 item. A CLI `nvh schedule add` landing in the same
-  instant as the API runner's write can still lose one record: the
-  in-process lock covers one process and the heartbeat lock covers
-  runners only, so a file lock around `Scheduler._save` is the next step.
+  was flattened to the pre-0.46 string rather than forwarded as history,
+  because `Engine._build_messages` would append an empty user turn. Closed
+  in 0.47: the engine, the stream generator and the handler forward it
+  with an empty prompt (`if prompt or not history`), and only an empty
+  transcript is a 400. A CLI `nvh schedule add` landing in the same
+  instant as the API runner's write could lose one record: the
+  in-process lock covered one process and the heartbeat lock covers
+  runners only. Closed in 0.47: `Scheduler._save` holds `<store>.lock`
+  across the read-modify-write and keeps any record another process saved
+  meanwhile.
   The session block's `local_only` and `cost_known` are vacuously true for
   an idle tab (no model answered since `since`) — since Wave C the pill
   treats an empty `by_provider` as nothing counted and reads
@@ -152,17 +153,24 @@ engine or CLI, not yet surfaced in the WebUI) · **open** (wanted, unscheduled)
   question card's Answer is disabled while any turn streams rather than
   queued; the card is keyed by tool name because the server surfaces one
   `ask_user` per turn (`toolKey` is the one place to change). `starter`,
-  `background` and `accent` are typed but not drawn on `/agents`, and the
-  thread's empty state still carries a hand-typed starter list — both
-  for the merged surface (C1b, now 0.47). A configured hourly rate of exactly 0
+  `background` and `accent` are typed but not drawn on `/agents` (a 0.47
+  S4 item); the thread's empty state no longer carries a hand-typed starter
+  list — since 0.47 its starters are the profiles' `starter` field, and its
+  first-run lines (the local model, three starters, where the rest lives)
+  come from the pure `web/lib/firstRun.ts`. A configured hourly rate of exactly 0
   keeps the `desktop ≈ $0.0000` term (O4 read literally) and only the
   amber rule is suppressed. The `/schedules` Reconnect re-tails a run
   from its first event; `Schedule.mode` is typed loosely so a CLI-written
   `do` record still lists; thread links read `/wizard?conversation=`
   until the 0.47 shell merge (C1b, O9) moves them to `/?c=`.
 - **Left from Wave D** (the launch-and-voice wave, shipped in 0.46.0).
-  Every launch target ships `verified_on: null` and prints unverified
-  until a maintainer runs the tool against its current version; detector
+  `claude` carries `verified_on: 2026-11-05` (Claude Code 2.1.257 accepts
+  the registration command and lists the server); the other four print
+  unverified until a maintainer runs the tool against its current version.
+  Codex CLI 0.152.1 refuses `wire_api = "chat"` and speaks only the
+  Responses API, which nvHive does not serve, so the `codex` snippet does
+  not load on current Codex: a `/v1/responses` endpoint (a translation over
+  the chat-completions handler) is a 0.47 S3 or 0.48 item. Detector
   rows for Codex, opencode and Continue were not added because `nvh
   integrate --auto` has no registration step to run for them. The route's
   `model` allow-list is faster-whisper's sizes plus the `Systran/` and
@@ -176,8 +184,8 @@ engine or CLI, not yet surfaced in the WebUI) · **open** (wanted, unscheduled)
   localhost is the owner's check. Cancelling a `voice-model-download` job
   stops the record and its stream but the worker inside huggingface_hub
   runs to completion; the partial snapshot is reused. The Groq keyring
-  lookup is ungated by `NVH_USE_KEYRING` (the registry gates it; parity is
-  a one-line change). The arm64 informational CI step decided O6 at pin
+  lookup was ungated by `NVH_USE_KEYRING`; closed in 0.47:
+  `_keyring_groq_key` honours the same gate as the registry. The arm64 informational CI step decided O6 at pin
   time: `faster-whisper` 1.2.1 installed and imported on `ubuntu-24.04-arm`,
   so the extra is the local path there (recorded in the 0.46.0 notes).
   `POST /v1/voice/speak` is unused by the web (the browser reads aloud)
@@ -198,8 +206,9 @@ engine or CLI, not yet surfaced in the WebUI) · **open** (wanted, unscheduled)
   `TOOL_CALL:` line quoted inside a foreign code fence should still fire
   (today it does; skipping fences would silence models that wrap the
   protocol line in one, so this is an owner call); and the POSIX kill
-  integration test's first real run is ubuntu CI (the root `sudo -n kill`
-  escalation is exercised through a fake process only).
+  integration test's first real run happened (ubuntu CI run 41351349212
+  green, the arm64 job included); the root `sudo -n kill` escalation is
+  still exercised through a fake process only.
 - **`LOCAL_MODEL_TIERS` review for qwen3.6.** The table
   (`nvh/core/local_models.py`) is on qwen3 today; whether to move it is an
   owner decision, so the review is unscheduled rather than placed in 0.46.

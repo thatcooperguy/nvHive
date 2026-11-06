@@ -103,6 +103,9 @@ def _not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "faster_whisper", None)
 
 
+_REAL_KEYRING_GROQ_KEY = voice._keyring_groq_key  # before _clean_slate stubs it
+
+
 @pytest.fixture(autouse=True)
 def _clean_slate(monkeypatch: pytest.MonkeyPatch) -> None:
     """No Groq key from this box's env or keyring, an empty per-process model cache,
@@ -120,6 +123,51 @@ def _clean_slate(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 # nvh/core/voice.py
 # ---------------------------------------------------------------------------
+
+
+def _fake_keyring(monkeypatch: pytest.MonkeyPatch, value: str | None) -> list[tuple[str, str]]:
+    calls: list[tuple[str, str]] = []
+    fake = types.ModuleType("keyring")
+
+    def get_password(service: str, name: str) -> str | None:
+        calls.append((service, name))
+        return value
+
+    fake.get_password = get_password  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "keyring", fake)
+    return calls
+
+
+def test_groq_keyring_lookup_is_off_unless_nvh_use_keyring_is_set(monkeypatch) -> None:
+    monkeypatch.delenv("NVH_USE_KEYRING", raising=False)
+    monkeypatch.delitem(sys.modules, "keyring", raising=False)
+    # A finder that fails the test if anything tries to import keyring.
+    monkeypatch.setattr(sys, "meta_path", [_NoKeyring(), *sys.meta_path])
+    assert _REAL_KEYRING_GROQ_KEY() is None
+    assert "keyring" not in sys.modules
+
+
+class _NoKeyring:
+    @staticmethod
+    def find_spec(name, path=None, target=None):
+        assert name != "keyring", "keyring was imported with NVH_USE_KEYRING off"
+        return None
+
+
+@pytest.mark.parametrize("value", ["1", "true", "YES"])
+def test_groq_keyring_lookup_reads_the_keyring_when_enabled(monkeypatch, value) -> None:
+    monkeypatch.setenv("NVH_USE_KEYRING", value)
+    calls = _fake_keyring(monkeypatch, "gsk-from-keyring")
+    assert _REAL_KEYRING_GROQ_KEY() == "gsk-from-keyring"
+    assert calls == [("nvhive", "groq_api_key")]
+
+
+@pytest.mark.parametrize("value", ["0", "", "no", "off"])
+def test_groq_keyring_lookup_stays_off_for_other_values(monkeypatch, value) -> None:
+    monkeypatch.setenv("NVH_USE_KEYRING", value)
+    calls = _fake_keyring(monkeypatch, "gsk-from-keyring")
+    assert _REAL_KEYRING_GROQ_KEY() is None
+    assert calls == []
 
 
 def test_voice_config_keeps_its_defaults_and_reads_the_model_env_at_construction(monkeypatch) -> None:

@@ -285,7 +285,14 @@ def platform_has_wheel() -> bool:
     return not (sys.platform == "win32" and platform.machine().upper() == "ARM64")
 
 
+def _keyring_enabled() -> bool:
+    """The registry's gate (``nvh/providers/registry.py``): ``NVH_USE_KEYRING`` is ``1``/``true``/``yes``."""
+    return os.environ.get("NVH_USE_KEYRING", "0").lower() in {"1", "true", "yes"}
+
+
 def _keyring_groq_key() -> str | None:
+    if not _keyring_enabled():
+        return None
     try:
         import keyring
 
@@ -297,12 +304,11 @@ def _keyring_groq_key() -> str | None:
 def groq_api_key() -> str | None:
     """``GROQ_KEY_ENV`` in the registry's order, then the keyring.
 
-    The keyring read is unconditional, unlike the registry's (gated on
-    ``NVH_USE_KEYRING`` as a startup-latency guard): ``nvh advisor add groq``
-    writes only the keyring, and the ``nvh`` entry point copies that key into
-    ``GROQ_API_KEY`` before any command runs, so under ``nvh serve`` both
-    lookups agree; this keeps the hint's own instruction working under a bare
-    uvicorn launch too.
+    The keyring read is gated on ``NVH_USE_KEYRING`` exactly as the
+    registry's is (a startup-latency guard: with it off, ``keyring`` is never
+    imported). ``nvh advisor add groq`` writes only the keyring, and the
+    ``nvh`` entry point copies that key into ``GROQ_API_KEY`` before any
+    command runs, so under ``nvh serve`` both lookups agree.
     """
     for name in GROQ_KEY_ENV:
         value = os.environ.get(name, "")

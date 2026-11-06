@@ -910,6 +910,21 @@ class TestDepsContract:
         assert asyncio.run(server_module._auth_open_mode()) is False
         assert deps_module.key_required() is True
 
+    def test_x_api_key_is_a_second_spelling_of_the_credential(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The Anthropic SDKs send ``ANTHROPIC_API_KEY`` as ``x-api-key`` (0.47, T3.6)."""
+        monkeypatch.setenv("HIVE_API_KEY", "k-for-test")
+        assert test_client.get("/v1/models").status_code == 401
+        ok = test_client.get("/v1/models", headers={"x-api-key": "k-for-test"})
+        assert ok.status_code == 200, ok.text
+
+    def test_wrong_x_api_key_is_refused_with_the_bearer_detail(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVE_API_KEY", "k-for-test")
+        bad_key = test_client.get("/v1/models", headers={"x-api-key": "not-the-key"})
+        bad_bearer = test_client.get("/v1/models", headers={"Authorization": "Bearer not-the-key"})
+        assert bad_key.status_code == bad_bearer.status_code == 401
+        assert bad_key.json()["detail"] == bad_bearer.json()["detail"]
+        assert "x-api-key" in bad_key.json()["detail"]
+
 # ---------------------------------------------------------------------------
 # 0.46 Wave B (B4l): the routers mounted on the app, the session cost block of
 # /v1/budget/status, the indexed vault save, profile starters, the avatar

@@ -1063,6 +1063,37 @@ def _roles(messages) -> list[tuple[str, str]]:
     return [(m.role, m.content) for m in messages]
 
 
+_TOOL_TAIL = [
+    Message(role="user", content="weather in Austin?"),
+    Message(role="assistant", content="", tool_calls=[_WEATHER_CALL]),
+    Message(role="tool", content="72F", tool_call_id="call_abc", name="get_weather"),
+]
+
+
+@pytest.mark.asyncio
+async def test_engine_build_messages_adds_no_empty_user_turn_after_a_tool_result(sync_db) -> None:
+    """0.47 (T3.9 a): history ending in a tool message is forwarded as is."""
+    engine = _make_engine()
+    forwarded = await engine._build_messages("", None, False, "be terse", "alpha", "test-model", history=list(_TOOL_TAIL))
+    assert [m.role for m in forwarded] == ["system", "user", "assistant", "tool"]
+    # A real prompt still lands as the final user turn, and no history still gets one.
+    with_prompt = await engine._build_messages("next", None, False, None, "alpha", "test-model", history=list(_TOOL_TAIL))
+    assert [m.role for m in with_prompt] == ["user", "assistant", "tool", "user"]
+    bare = await engine._build_messages("", None, False, None, "alpha", "test-model")
+    assert [(m.role, m.content) for m in bare] == [("user", "")]
+
+
+@pytest.mark.asyncio
+async def test_stream_gen_forwards_a_transcript_ending_in_a_tool_message_as_history() -> None:
+    eng, mp = _tool_engine(StreamChunk(delta="", is_final=True, finish_reason=FinishReason.STOP))
+    out = b"".join([c async for c in openai_stream_generator(
+        eng, "", "openai", "gpt-4o", None, 0.5, 100, "gpt-4o", history=list(_TOOL_TAIL))])
+    assert out.rstrip().endswith(b"data: [DONE]")
+    sent = mp.stream.call_args.kwargs["messages"]
+    assert [m.role for m in sent][-3:] == ["user", "assistant", "tool"] and sent[-1].tool_call_id == "call_abc"
+    assert all(m.content != "" or m.role == "assistant" for m in sent)
+
+
 class TestHistoryForwarding:
     """O12: a multi-turn transcript reaches the provider as messages on both the
     legacy and the standard path, stream or not; the header restores the old string."""
@@ -1110,7 +1141,9 @@ class TestHistoryForwarding:
         assert messages[2].tool_call_id == "call_abc" and messages[2].name == "get_weather" and messages[2].content == "72F"
         assert messages[3].content == "and in Dallas?"
 
-    def test_a_transcript_ending_in_a_tool_result_is_flattened_not_refused(self, recording) -> None:
+    def test_a_transcript_ending_in_a_tool_result_is_forwarded_as_history(self, recording) -> None:
+        """0.47: an agent loop posting tool results back gets them forwarded as history
+        (no trailing user turn, no empty user message), not the pre-0.46 flattened string."""
         client, provider = recording
         transcript = [
             {"role": "user", "content": "weather in Austin?"},
@@ -1120,11 +1153,15 @@ class TestHistoryForwarding:
         resp = client.post("/v1/chat/completions", json={"model": "auto", "messages": transcript})
         assert resp.status_code == 200
         [(messages, _kw)] = provider.complete_calls
-        # No trailing user turn: the pre-0.46 rendering, which every caller handled
-        # (the engine's default system prompt leads, as it always did).
-        assert _roles([m for m in messages if m.role != "system"]) == [
-            ("user", "User: weather in Austin?\nAssistant: \nUser: 72F"),
-        ]
+        forwarded = [m for m in messages if m.role != "system"]
+        assert [m.role for m in forwarded] == ["user", "assistant", "tool"]
+        assert forwarded[0].content == "weather in Austin?" and forwarded[2].content == "72F"
+        assert forwarded[1].tool_calls and "User:" not in (forwarded[0].content or "")
+
+    def test_an_empty_transcript_is_still_a_400(self, recording) -> None:
+        client, _provider = recording
+        resp = client.post("/v1/chat/completions", json={"model": "auto", "messages": []})
+        assert resp.status_code == 400
 
     def test_council_still_sees_the_whole_transcript_flattened(self, recording, monkeypatch) -> None:
         client, _provider = recording

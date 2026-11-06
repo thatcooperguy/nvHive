@@ -537,7 +537,8 @@ async def openai_stream_generator(
         messages.append(Message(role="system", content=sys_prompt))
     if history:
         messages.extend(history)
-    messages.append(Message(role="user", content=prompt))
+    if prompt or not history:
+        messages.append(Message(role="user", content=prompt))
 
     effective_model = decision.model or requested_model or "nvhive"
 

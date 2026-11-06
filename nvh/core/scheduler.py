@@ -23,6 +23,7 @@ Examples:
   nvh schedule start   # start the scheduler daemon
 """
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -31,6 +32,7 @@ import re
 import threading
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import MISSING, dataclass, field, fields
 from datetime import UTC, datetime
 from pathlib import Path
@@ -293,11 +295,63 @@ def _replace_with_retry(src: Path, dst: Path) -> None:
             _sleep(_SAVE_RETRY_DELAY_S)
 
 
+_FILE_LOCK_TIMEOUT_S = 10.0
+_FILE_LOCK_STALE_S = 30.0
+_FILE_LOCK_POLL_S = 0.02
+
+
+@contextlib.contextmanager
+def _file_lock(path: Path) -> Iterator[None]:
+    """Hold ``<store>.lock`` (an ``O_CREAT|O_EXCL`` file) across a read-modify-write.
+
+    Portable (Windows and POSIX): creating the file is the acquire, removing it
+    the release. A lock file older than ``_FILE_LOCK_STALE_S`` belongs to a
+    process that died holding it and is broken; after ``_FILE_LOCK_TIMEOUT_S``
+    of waiting the write proceeds unlocked with a warning rather than failing,
+    since the atomic replace still keeps the file whole.
+    """
+    lock = path.with_name(path.name + ".lock")
+    deadline = time.monotonic() + _FILE_LOCK_TIMEOUT_S
+    held = False
+    while True:
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > _FILE_LOCK_STALE_S:
+                    lock.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                continue  # released between the failed create and the stat
+            if time.monotonic() >= deadline:
+                logger.warning("Could not take %s within %.0fs; saving without it", lock, _FILE_LOCK_TIMEOUT_S)
+                break
+            _sleep(_FILE_LOCK_POLL_S)
+        except PermissionError:
+            # Windows: the file is mid-delete by its holder.
+            if time.monotonic() >= deadline:
+                break
+            _sleep(_FILE_LOCK_POLL_S)
+        else:
+            os.close(fd)
+            held = True
+            break
+    try:
+        yield
+    finally:
+        if held:
+            try:
+                lock.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 class Scheduler:
     def __init__(self, schedule_file: Path | None = None):
         self.schedule_file = schedule_file or default_schedule_file()
         self.schedule_file.parent.mkdir(parents=True, exist_ok=True)
         self._tasks: list[ScheduledTask] = []
+        self._known_ids: set[str] = set()
         self._load()
 
     # -- persistence --------------------------------------------------------
@@ -343,6 +397,18 @@ class Scheduler:
                 continue
             tasks.append(ScheduledTask.from_dict(item))
         self._tasks = tasks
+        self._known_ids = {t.id for t in tasks}
+
+    def _disk_tasks(self) -> list[ScheduledTask]:
+        """The records now in the file, read without side effects; ``[]`` when it cannot be parsed."""
+        try:
+            data = json.loads(self.schedule_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        records = data.get("schedules") if isinstance(data, dict) else data
+        if not isinstance(records, list):
+            return []
+        return [ScheduledTask.from_dict(item) for item in records if isinstance(item, dict)]
 
     def _quarantine(self, reason: str) -> None:
         """Move an unparseable store aside once and log one line; the store starts empty."""
@@ -381,24 +447,36 @@ class Scheduler:
         across processes the runner's heartbeat lock (``state/scheduler.lock``)
         keeps one runner per store, and a CLI edit beside a live API runner is
         the one unserialised pair left.
+
+        Since 0.47 that pair is serialised too: the read-modify-write holds
+        ``<store>.lock`` (:func:`_file_lock`) and, under it, folds in any record
+        another process saved since this instance loaded (an id neither held
+        here nor seen at load), so a CLI ``nvh schedule add`` racing the API
+        runner keeps both records. A record this instance removed stays removed.
         """
-        payload = {
-            "schema": SCHEDULE_SCHEMA,
-            "updated_at": _now_iso(),
-            "schedules": [t.to_dict() for t in self._tasks],
-        }
-        text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
         self.schedule_file.parent.mkdir(parents=True, exist_ok=True)
-        token = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
-        tmp = self.schedule_file.with_name(f"{self.schedule_file.name}.{token}.tmp")
-        try:
-            tmp.write_text(text, encoding="utf-8")
-            _replace_with_retry(tmp, self.schedule_file)
-        finally:
+        with _file_lock(self.schedule_file):
+            mine = {t.id for t in self._tasks}
+            for other in self._disk_tasks():
+                if other.id not in mine and other.id not in self._known_ids:
+                    self._tasks.append(other)
+            payload = {
+                "schema": SCHEDULE_SCHEMA,
+                "updated_at": _now_iso(),
+                "schedules": [t.to_dict() for t in self._tasks],
+            }
+            text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+            token = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+            tmp = self.schedule_file.with_name(f"{self.schedule_file.name}.{token}.tmp")
             try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
+                tmp.write_text(text, encoding="utf-8")
+                _replace_with_retry(tmp, self.schedule_file)
+            finally:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            self._known_ids = {t.id for t in self._tasks}
 
     # -- records ------------------------------------------------------------
 

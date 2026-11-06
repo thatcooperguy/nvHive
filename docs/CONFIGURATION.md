@@ -722,7 +722,7 @@ Storage overrides are in the table above. Everything else nvHive reads:
 
 | Variable | Default | Effect |
 |---|---|---|
-| `HIVE_API_KEY` | unset | bearer token for the API; unset and no users = open/local mode. Required before `nvh serve --host 0.0.0.0` |
+| `HIVE_API_KEY` | unset | key for the API, accepted as `Authorization: Bearer <key>`, `X-Hive-API-Key: <key>` or `x-api-key: <key>` (the header the Anthropic SDKs send for `ANTHROPIC_API_KEY`); unset and no users = open/local mode. Required before `nvh serve --host 0.0.0.0` |
 | `HIVE_CORS_ORIGINS` | WebUI defaults | comma-separated extra origins for the API |
 | `HIVE_LOG_LEVEL`, `HIVE_LOG_FORMAT`, `HIVE_LOG_FILE` | `INFO`, `text`, `$NVH_HOME/logs/nvhive.log` | API logging; `json` for structured logs |
 | `HIVE_PROFILE` | unset | config profile to apply when `--profile` is not given |

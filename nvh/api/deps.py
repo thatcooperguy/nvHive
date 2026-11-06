@@ -108,8 +108,10 @@ async def require_auth(
     Accepts credentials via:
     - ``Authorization: Bearer <token>`` header
     - ``X-Hive-API-Key: <key>`` header
+    - ``x-api-key: <key>`` header (what the Anthropic SDKs send for
+      ``ANTHROPIC_API_KEY``), a second spelling of the same credential
     """
-    x_key = request.headers.get("X-Hive-API-Key")
+    x_key = request.headers.get("X-Hive-API-Key") or request.headers.get("x-api-key")
 
     # Try user-based auth first
     user = await _get_current_user_optional(credentials, x_key)
@@ -132,7 +134,7 @@ async def require_auth(
     if credentials and hmac.compare_digest(credentials.credentials, expected):
         return None
 
-    # Check X-Hive-API-Key header
+    # Check X-Hive-API-Key / x-api-key header
     if x_key and hmac.compare_digest(x_key, expected):
         return None
 
@@ -140,7 +142,8 @@ async def require_auth(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=(
             "Authentication required. Provide a valid API key via "
-            "'Authorization: Bearer <key>' or 'X-Hive-API-Key: <key>' header."
+            "'Authorization: Bearer <key>', 'X-Hive-API-Key: <key>' or "
+            "'x-api-key: <key>' header."
         ),
         headers={"WWW-Authenticate": "Bearer"},
     )

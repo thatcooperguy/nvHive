@@ -3,6 +3,50 @@
 ## [Unreleased]
 
 ### Added
+- **The chat's empty state is a guided first run.** Three lines derived
+  from the machine, not typed: your local model (ready, pulling with its
+  size, or — without a GPU — the free cloud tier with a pointer to add a
+  key), three starters drawn from the agent profiles' `starter` field
+  (the hand-typed list is gone), and where keys, ports and packs live
+  (Settings → Get started). The mascot says "Ask me what this machine can
+  do" once per session. The rules are the pure `web/lib/firstRun.ts` with
+  a Node test; the component reads the models, the install jobs and the
+  Wizard context through calls that already existed.
+- **One next action on every banner.** The API-offline banner ends with
+  **Start the API** (the same bridge the system console's Restart uses) and
+  the welcome-back panel ends with **Open the console**. A deliberate
+  local-only refusal in the thread adds "Add a key in Settings →
+  Connections, or install a local model in Models." under the bubble; the
+  reason code is never shown as text.
+- **`x-api-key` is a second spelling of the API credential.** `require_auth`
+  accepts `x-api-key: <key>` exactly as `Authorization: Bearer <key>` and
+  `X-Hive-API-Key`, so the Anthropic SDKs' `ANTHROPIC_API_KEY=<key>` works
+  against nvHive's Anthropic paths instead of earning a 401; the 401 detail
+  names all three spellings. INTEGRATIONS.md and the `HIVE_API_KEY` row say
+  so.
+- **A transcript that ends in a tool message is forwarded as history.** An
+  agent loop posting tool results to `/v1/chat/completions` (and the stream
+  path, and `Engine.query(history=...)`) gets them forwarded with an empty
+  prompt — `_build_messages` appends no empty user turn — instead of the
+  pre-0.46 flattened string; only an empty transcript is a 400.
+- **`Scheduler._save` holds a file lock.** `<store>.lock` (an
+  `O_CREAT|O_EXCL` file, portable to Windows) covers the read-modify-write,
+  a lock older than thirty seconds is broken as stale, and under it any
+  record another process saved since this instance loaded is folded in, so
+  `nvh schedule add` racing the API runner keeps both records; a record this
+  instance removed stays removed.
+
+### Changed
+- **The Groq keyring lookup honours `NVH_USE_KEYRING`** exactly as the
+  provider registry does (`1`, `true` or `yes`); with it off, `keyring` is
+  never imported by the voice path.
+- **`nvh launch` targets:** `claude` is verified against Claude Code 2.1.257
+  (`verified_on: 2026-11-05`); the `codex` row records that Codex CLI
+  0.152.1 refuses `wire_api = "chat"` and speaks only the Responses API,
+  which nvHive does not serve yet, so that snippet does not load on current
+  Codex (a `/v1/responses` endpoint is the follow-up).
+
+### Added (earlier in this cycle)
 - **The chat home follows a new Wizard thread and switches modes on a
   phone.** When the Wizard creates its conversation on the first message the
   sidebar highlights it at once (the page reads the `?c=` the thread wrote

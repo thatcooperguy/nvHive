@@ -150,8 +150,9 @@ overridden.
 
 With `HIVE_API_KEY` set, every proxy path needs the key as a bearer token —
 the Anthropic proxy included since 0.46: `OPENAI_API_KEY=<key>` and
-`ANTHROPIC_AUTH_TOKEN=<key>` (the Anthropic SDKs send `ANTHROPIC_API_KEY` as
-`x-api-key`, which nvHive does not read). In open mode any value works.
+`ANTHROPIC_AUTH_TOKEN=<key>`. Since 0.47 `ANTHROPIC_API_KEY=<key>` works too:
+the Anthropic SDKs send it as `x-api-key`, which nvHive reads as a second
+spelling of the same credential. In open mode any value works.
 
 ### `nvh launch`
 
@@ -176,16 +177,17 @@ in the bundled `nvh/data/launch_targets.json`, read through `nvh.data`.
 
 | Target | Tool | How | Verified |
 |---|---|---|---|
-| `claude` | Claude Code | MCP: registers nvHive's MCP server (`claude mcp add nvhive -- nvhive-mcp`, the same step `nvh integrate` runs) and launches `claude`; inference stays with Anthropic | unverified |
-| `codex` | Codex CLI | snippet: a `~/.codex/config.toml` `[model_providers.nvhive]` stanza with `base_url`, `env_key = "HIVE_API_KEY"` and `wire_api = "chat"`, plus `model_provider = "nvhive"` | unverified |
+| `claude` | Claude Code | MCP: registers nvHive's MCP server (`claude mcp add nvhive -- nvhive-mcp`, the same step `nvh integrate` runs) and launches `claude`; inference stays with Anthropic | 2026-11-05 (Claude Code 2.1.257 accepts the command and lists the server, pending approval until you open `claude`) |
+| `codex` | Codex CLI | snippet: a `~/.codex/config.toml` `[model_providers.nvhive]` stanza with `base_url`, `env_key = "HIVE_API_KEY"` and `wire_api = "chat"`, plus `model_provider = "nvhive"` | unverified — checked 2026-11-05 against Codex CLI 0.152.1, which refuses `wire_api = "chat"` and speaks only the Responses API nvHive does not serve yet; the snippet does not load there |
 | `opencode` | OpenCode | snippet: an `opencode.json` provider entry with `baseURL` and the routing modes as model ids | unverified |
 | `continue` | Continue | snippet: a `~/.continue/config.yaml` model with `provider: openai` and `apiBase` | unverified |
 | `cursor` | Cursor | snippet: Settings → Models → Override OpenAI Base URL, the key field, and a custom model named `auto` | unverified |
 
-Every row carries `verified_on`. The five targets ship with `null`, which
-prints as "unverified against this tool's current version — `--print` shows
-exactly what nvHive sets": a tool's config shape is an external fact the
-repo cannot test, so the column stays honest until a maintainer records a
+Every row carries `verified_on`. `claude` carries a date; the other four ship
+with `null`, which prints as "unverified against this tool's current version
+— `--print` shows exactly what nvHive sets": a tool's config shape is an
+external fact the repo cannot test, so the column stays honest until a
+maintainer records a
 date after running the tool against that release. The `docs_url` column of
 `--list` points at each tool's own documentation.
 

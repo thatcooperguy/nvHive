@@ -6280,17 +6280,16 @@ def _proxy_prompt_and_history(
     forwarded as ``Engine.query(history=...)``, the shape the model expects
     (:func:`nvh.api.proxy.openai_messages_to_nvhive_history`). ``flatten``
     (the ``x-nvhive-history: flatten`` header) restores the pre-0.46 single
-    ``User:``/``Assistant:`` string with no history. A transcript with no
-    trailing user turn (an agent loop posting tool results back) is flattened
-    too: the engine answers a user message, and the old rendering is the one
-    every caller already handled.
+    ``User:``/``Assistant:`` string with no history. Since 0.47 a transcript
+    with no trailing user turn (an agent loop posting tool results back) is
+    forwarded as history with an empty prompt: ``Engine._build_messages``
+    appends no empty user turn, so the model answers the tool results.
     """
     from nvh.api.proxy import openai_messages_to_nvhive, openai_messages_to_nvhive_history
 
     if not flatten:
         prompt, system_prompt, history = openai_messages_to_nvhive_history(messages)
-        if prompt or not history:
-            return prompt, system_prompt, (history or None)
+        return prompt, system_prompt, (history or None)
     prompt, system_prompt = openai_messages_to_nvhive(messages)
     return prompt, system_prompt, None
 
@@ -6395,7 +6394,7 @@ async def proxy_chat_completions(
     flatten = raw_request.headers.get(_HISTORY_HEADER, "").strip().lower() == "flatten"
     prompt, system_prompt, history = _proxy_prompt_and_history(messages_dicts, flatten=flatten)
 
-    if not prompt:
+    if not prompt and not history:
         raise HTTPException(status_code=400, detail="No user message content found.")
 
     # Council and throwdown take one prompt string (no history parameter), so

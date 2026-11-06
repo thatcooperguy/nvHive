@@ -1218,7 +1218,8 @@ class Engine:
                 model=model,
             )
             messages = await self.context.get_context_messages(conv_id, system_prompt)
-            messages.append(Message(role="user", content=prompt))
+            if prompt or not history:
+                messages.append(Message(role="user", content=prompt))
             return messages
 
         messages: list[Message] = []
@@ -1226,7 +1227,10 @@ class Engine:
             messages.append(Message(role="system", content=system_prompt))
         if history:
             messages.extend(history)
-        messages.append(Message(role="user", content=prompt))
+        if prompt or not history:
+            # A transcript that ends in an assistant or tool message has no
+            # new user turn; an empty one would follow the tool results.
+            messages.append(Message(role="user", content=prompt))
         return messages
 
     async def _execute_with_fallback(
